@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 
-use crate::expressions::{token::Error, types::CellReferenceIndex};
+use crate::expressions::{parser::ArrayNode, token::Error, types::CellReferenceIndex};
 
+#[derive(Clone)]
 pub struct Range {
     pub left: CellReferenceIndex,
     pub right: CellReferenceIndex,
@@ -23,6 +24,7 @@ pub(crate) enum CalcResult {
     },
     EmptyCell,
     EmptyArg,
+    Array(Vec<Vec<ArrayNode>>),
 }
 
 impl CalcResult {

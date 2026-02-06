@@ -2,13 +2,13 @@
 
 use crate::{
     expressions::types::Area,
-    types::{Alignment, BorderItem, BorderStyle, HorizontalAlignment, VerticalAlignment},
-    UserModel,
+    test::user_model::util::new_empty_user_model,
+    types::{Alignment, HorizontalAlignment, VerticalAlignment},
 };
 
 #[test]
 fn basic_fonts() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -77,7 +77,7 @@ fn basic_fonts() {
 
     let send_queue = model.flush_send_queue();
 
-    let mut model2 = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model2 = new_empty_user_model();
     model2.apply_external_diffs(&send_queue).unwrap();
 
     let style = model2.get_cell_style(0, 1, 1).unwrap();
@@ -90,7 +90,7 @@ fn basic_fonts() {
 
 #[test]
 fn font_errors() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -133,7 +133,7 @@ fn font_errors() {
 
 #[test]
 fn basic_fill() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -161,7 +161,7 @@ fn basic_fill() {
 
     let send_queue = model.flush_send_queue();
 
-    let mut model2 = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model2 = new_empty_user_model();
     model2.apply_external_diffs(&send_queue).unwrap();
 
     let style = model2.get_cell_style(0, 1, 1).unwrap();
@@ -171,7 +171,7 @@ fn basic_fill() {
 
 #[test]
 fn fill_errors() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -192,7 +192,7 @@ fn fill_errors() {
 
 #[test]
 fn basic_format() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -222,7 +222,7 @@ fn basic_format() {
 
     let send_queue = model.flush_send_queue();
 
-    let mut model2 = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model2 = new_empty_user_model();
     model2.apply_external_diffs(&send_queue).unwrap();
 
     let style = model2.get_cell_style(0, 1, 1).unwrap();
@@ -230,159 +230,8 @@ fn basic_format() {
 }
 
 #[test]
-fn basic_borders() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
-    let range = Area {
-        sheet: 0,
-        row: 1,
-        column: 1,
-        width: 1,
-        height: 1,
-    };
-
-    model
-        .update_range_style(&range, "border.left", "thin,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::Thin,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.left", "thin,")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::Thin,
-            color: None,
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.right", "dotted,#F1F1F2")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.right,
-        Some(BorderItem {
-            style: BorderStyle::Dotted,
-            color: Some("#F1F1F2".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.top", "double,#F1F1F3")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.top,
-        Some(BorderItem {
-            style: BorderStyle::Double,
-            color: Some("#F1F1F3".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.bottom", "medium,#F1F1F4")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.bottom,
-        Some(BorderItem {
-            style: BorderStyle::Medium,
-            color: Some("#F1F1F4".to_owned()),
-        })
-    );
-
-    while model.can_undo() {
-        model.undo().unwrap();
-    }
-
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(style.border.left, None);
-    assert_eq!(style.border.top, None);
-    assert_eq!(style.border.right, None);
-    assert_eq!(style.border.bottom, None);
-
-    while model.can_redo() {
-        model.redo().unwrap();
-    }
-
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::Thin,
-            color: None,
-        })
-    );
-    assert_eq!(
-        style.border.right,
-        Some(BorderItem {
-            style: BorderStyle::Dotted,
-            color: Some("#F1F1F2".to_owned()),
-        })
-    );
-    assert_eq!(
-        style.border.top,
-        Some(BorderItem {
-            style: BorderStyle::Double,
-            color: Some("#F1F1F3".to_owned()),
-        })
-    );
-    assert_eq!(
-        style.border.bottom,
-        Some(BorderItem {
-            style: BorderStyle::Medium,
-            color: Some("#F1F1F4".to_owned()),
-        })
-    );
-
-    let send_queue = model.flush_send_queue();
-
-    let mut model2 = UserModel::new_empty("model", "en", "UTC").unwrap();
-    model2.apply_external_diffs(&send_queue).unwrap();
-
-    let style = model2.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::Thin,
-            color: None,
-        })
-    );
-    assert_eq!(
-        style.border.right,
-        Some(BorderItem {
-            style: BorderStyle::Dotted,
-            color: Some("#F1F1F2".to_owned()),
-        })
-    );
-    assert_eq!(
-        style.border.top,
-        Some(BorderItem {
-            style: BorderStyle::Double,
-            color: Some("#F1F1F3".to_owned()),
-        })
-    );
-    assert_eq!(
-        style.border.bottom,
-        Some(BorderItem {
-            style: BorderStyle::Medium,
-            color: Some("#F1F1F4".to_owned()),
-        })
-    );
-}
-
-#[test]
 fn basic_alignment() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -473,7 +322,7 @@ fn basic_alignment() {
 
 #[test]
 fn alignment_errors() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -521,7 +370,7 @@ fn alignment_errors() {
 
 #[test]
 fn basic_wrap_text() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -568,144 +417,8 @@ fn basic_wrap_text() {
 }
 
 #[test]
-fn more_basic_borders() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
-    let range = Area {
-        sheet: 0,
-        row: 1,
-        column: 1,
-        width: 1,
-        height: 1,
-    };
-
-    model
-        .update_range_style(&range, "border.left", "thick,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::Thick,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.left", "slantDashDot,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::SlantDashDot,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.left", "mediumDashDot,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::MediumDashDot,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.left", "mediumDashDotDot,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::MediumDashDotDot,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model
-        .update_range_style(&range, "border.left", "mediumDashed,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::MediumDashed,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-}
-
-#[test]
-fn border_errors() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
-    let range = Area {
-        sheet: 0,
-        row: 1,
-        column: 1,
-        width: 1,
-        height: 1,
-    };
-
-    assert_eq!(
-        model.update_range_style(&range, "border.lef", "thick,#F1F1F1"),
-        Err("Invalid style path: 'border.lef'.".to_string())
-    );
-
-    assert_eq!(
-        model.update_range_style(&range, "border.left", "thic,#F1F1F1"),
-        Err("Invalid border style: 'thic'.".to_string())
-    );
-
-    assert_eq!(
-        model.update_range_style(&range, "border.left", "thick,#F1F1F"),
-        Err("Invalid color: '#F1F1F'.".to_string())
-    );
-
-    assert_eq!(
-        model.update_range_style(&range, "border.left", " "),
-        Err("Invalid border value: ' '.".to_string())
-    );
-
-    assert_eq!(
-        model.update_range_style(&range, "border.left", "thick,#F1F1F1,thin"),
-        Err("Invalid border value: 'thick,#F1F1F1,thin'.".to_string())
-    );
-}
-
-#[test]
-fn empty_removes_border() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
-    let range = Area {
-        sheet: 0,
-        row: 1,
-        column: 1,
-        width: 1,
-        height: 1,
-    };
-    model
-        .update_range_style(&range, "border.left", "mediumDashDotDot,#F1F1F1")
-        .unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(
-        style.border.left,
-        Some(BorderItem {
-            style: BorderStyle::MediumDashDotDot,
-            color: Some("#F1F1F1".to_owned()),
-        })
-    );
-
-    model.update_range_style(&range, "border.left", "").unwrap();
-    let style = model.get_cell_style(0, 1, 1).unwrap();
-    assert_eq!(style.border.left, None);
-}
-
-#[test]
 fn false_removes_value() {
-    let mut model = UserModel::new_empty("model", "en", "UTC").unwrap();
+    let mut model = new_empty_user_model();
     let range = Area {
         sheet: 0,
         row: 1,
@@ -722,4 +435,48 @@ fn false_removes_value() {
     model.update_range_style(&range, "font.b", "false").unwrap();
     let style = model.get_cell_style(0, 1, 1).unwrap();
     assert!(!style.font.b);
+}
+
+#[test]
+fn cell_clear_formatting() {
+    let mut model = new_empty_user_model();
+    let range = Area {
+        sheet: 0,
+        row: 1,
+        column: 1,
+        width: 1,
+        height: 1,
+    };
+
+    // bold
+    model.update_range_style(&range, "font.b", "true").unwrap();
+    model
+        .update_range_style(&range, "alignment.horizontal", "centerContinuous")
+        .unwrap();
+
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(style.font.b);
+    assert_eq!(
+        style.alignment.unwrap().horizontal,
+        HorizontalAlignment::CenterContinuous
+    );
+
+    model.range_clear_all(&range).unwrap();
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(!style.font.b);
+    assert_eq!(style.alignment, None);
+
+    model.undo().unwrap();
+
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(style.font.b);
+    assert_eq!(
+        style.alignment.unwrap().horizontal,
+        HorizontalAlignment::CenterContinuous
+    );
+    model.redo().unwrap();
+
+    let style = model.get_cell_style(0, 1, 1).unwrap();
+    assert!(!style.font.b);
+    assert_eq!(style.alignment, None);
 }

@@ -1,0 +1,207 @@
+{
+  "toolbar": {
+    "redo": "Redo",
+    "undo": "Undo",
+    "copy_styles": "Copy styles",
+    "clear_formatting": "Clear formatting",
+    "euro": "Format as Euro",
+    "percentage": "Format as percentage",
+    "bold": "Bold",
+    "italic": "Italic",
+    "underline": "Underline",
+    "strike_through": "Strikethrough",
+    "align_left": "Align left",
+    "align_right": "Align right",
+    "align_center": "Align center",
+    "format_number": "Format number",
+    "font_color": "Font color",
+    "fill_color": "Fill color",
+    "increase_font_size": "Increase font size",
+    "decrease_font_size": "Decrease font size",
+    "decimal_places_increase": "Increase decimal places",
+    "decimal_places_decrease": "Decrease decimal places",
+    "show_hide_grid_lines": "Show/hide grid lines",
+    "named_ranges": "Named ranges",
+    "vertical_align_bottom": "Align bottom",
+    "vertical_align_middle": "Align middle",
+    "vertical_align_top": "Align top",
+    "selected_png": "Export selected area as PNG",
+    "wrap_text": "Wrap text",
+    "scroll_left": "Scroll left",
+    "scroll_right": "Scroll right",
+    "format_menu": {
+      "auto": "Auto",
+      "number": "Number",
+      "percentage": "Percentage",
+      "currency_eur": "Euro (EUR)",
+      "currency_usd": "Dollar (USD)",
+      "currency_gbp": "British Pound (GBP)",
+      "date_short": "Short date",
+      "date_long": "Long date",
+      "custom": "Custom",
+      "number_example": "1,000.00",
+      "percentage_example": "10%",
+      "currency_eur_example": "€",
+      "currency_usd_example": "$",
+      "currency_gbp_example": "£"
+    },
+    "borders": {
+      "title": "Borders",
+      "all": "All borders",
+      "inner": "Inner borders",
+      "outer": "Outer borders",
+      "top": "Top borders",
+      "bottom": "Bottom borders",
+      "clear": "Clear borders",
+      "left": "Left borders",
+      "right": "Right borders",
+      "horizontal": "Horizontal borders",
+      "vertical": "Vertical borders",
+      "color": "Border color",
+      "style": "Border style"
+    }
+  },
+  "num_fmt": {
+    "title": "Custom number format",
+    "label": "Number format",
+    "close": "Close dialog",
+    "save": "Save"
+  },
+  "sheet_rename": {
+    "rename": "Save",
+    "label": "New name",
+    "title": "Rename Sheet",
+    "close": "Close dialog"
+  },
+  "sheet_delete": {
+    "title": "Are you sure?",
+    "message": "The sheet '{{sheetName}}' will be deleted.",
+    "confirm": "Yes, delete sheet",
+    "cancel": "Cancel"
+  },
+  "sheet_tab": {
+    "rename": "Rename",
+    "change_color": "Change Color",
+    "delete": "Delete",
+    "hide_sheet": "Hide sheet"
+  },
+  "formula_input": {
+    "update": "Update",
+    "label": "Formula",
+    "title": "Update formula"
+  },
+  "formula_bar": {
+    "manage_named_ranges": "Manage Named Ranges"
+  },
+  "navigation": {
+    "add_sheet": "Add sheet",
+    "sheet_list": "Sheet list"
+  },
+  "name_manager_dialog": {
+    "title": "Named Ranges",
+    "empty_message1": "No named ranges added yet.",
+    "empty_message2": "Click on 'Add new' to add one.",
+    "name": "Name",
+    "range": "Scope",
+    "scope": "Range",
+    "help": "About Named Ranges",
+    "new": "Add new",
+    "workbook": "Workbook",
+    "global": "(Global)",
+    "close": "Close dialog",
+    "delete": "Delete Range",
+    "edit": "Edit Range",
+    "back_to_list": "Back to list",
+    "add_new_range": "Add a new range",
+    "edit_range": "Edit range",
+    "new_named_range": "New Named Range",
+    "range_name": "Range name",
+    "enter_range_name": "Enter range name",
+    "scope_label": "Scope",
+    "scope_helper": "The scope of the named range determines where it is available.",
+    "refers_to": "Refers to",
+    "enter_formula": "Enter formula",
+    "cancel": "Cancel",
+    "apply": "Apply changes",
+    "discard": "Discard changes",
+    "default_range_prefix": "Range",
+    "errors": {
+      "range_name_required": "Range name is required",
+      "name_cannot_contain_spaces": "Name cannot contain spaces",
+      "name_cannot_start_with_number": "Name cannot start with a number",
+      "name_invalid_characters": "Name contains invalid characters. Use only letters, numbers, underscores, and periods. Must start with a letter or underscore.",
+      "name_already_exists": "This name already exists in the selected scope"
+    }
+  },
+  "cell_context": {
+    "insert_row_above": "Insert 1 row above",
+    "insert_row_below": "Insert 1 row below",
+    "insert_column_before": "Insert 1 column left",
+    "insert_column_after": "Insert 1 column right",
+    "freeze_columns": "Freeze up to column '{{column}}'",
+    "freeze_rows": "Freeze up to row '{{row}}'",
+    "unfreeze_rows": "Unfreeze rows",
+    "unfreeze_columns": "Unfreeze columns",
+    "delete_row": "Delete row '{{row}}'",
+    "delete_column": "Delete column '{{column}}'",
+    "freeze": "Freeze",
+    "insert_row": "Insert row",
+    "insert_column": "Insert column",
+    "move_row": "Move row",
+    "move_column": "Move column",
+    "move_row_up": "Move row up",
+    "move_row_down": "Move row down",
+    "move_column_left": "Move column left",
+    "move_column_right": "Move column right"
+  },
+  "color_picker": {
+    "apply": "Add color",
+    "cancel": "Cancel",
+    "add": "Add new color",
+    "default": "Default color",
+    "no_fill": "No fill",
+    "recent": "Recent"
+  },
+  "right_drawer": {
+    "resize_drawer": "Resize drawer",
+    "close": "Close"
+  },
+  "regional_settings": {
+    "open_regional_settings": "Open regional settings",
+    "title": "Regional Settings",
+    "close": "Close dialog",
+    "locale": {
+      "title": "Locale",
+      "locale_label": "Locale",
+      "locale_example1": "Number",
+      "locale_example2": "Date and Time",
+      "locale_example3": "Formula delimiter",
+      "delimiter_comma": "Comma",
+      "delimiter_semicolon": "Semicolon"
+    },
+    "language": {
+      "title": "Language",
+      "language_label": "Engine Language",
+      "language_helper": "Controls the language used in function names and error messages.",
+      "display_language": {
+        "en": "English",
+        "es": "Español",
+        "fr": "Français",
+        "de": "Deutsch",
+        "it": "Italiano"
+      },
+      "display_language_current_lang": {
+        "en": "English",
+        "es": "Spanish",
+        "fr": "French",
+        "de": "German",
+        "it": "Italian"
+      }
+    },
+    "timezone": {
+      "title": "Timezone",
+      "timezone_label": "Timezone",
+      "timezone_helper": "Modifying this setting will impact date- and time-related functions, including TODAY() and NOW()."
+    }
+  }
+}

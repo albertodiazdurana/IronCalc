@@ -50,19 +50,19 @@ fn search(search_for: &str, text: &str, start: usize) -> Option<i32> {
     None
 }
 
-impl Model {
+impl<'a> Model<'a> {
     pub(crate) fn fn_concat(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         let mut result = "".to_string();
         for arg in args {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::String(value) => result = format!("{}{}", result, value),
-                CalcResult::Number(value) => result = format!("{}{}", result, value),
+                CalcResult::String(value) => result = format!("{result}{value}"),
+                CalcResult::Number(value) => result = format!("{result}{value}"),
                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
                 CalcResult::Boolean(value) => {
                     if value {
-                        result = format!("{}TRUE", result);
+                        result = format!("{result}TRUE");
                     } else {
-                        result = format!("{}FALSE", result);
+                        result = format!("{result}FALSE");
                     }
                 }
                 error @ CalcResult::Error { .. } => return error,
@@ -82,23 +82,35 @@ impl Model {
                                 column,
                             }) {
                                 CalcResult::String(value) => {
-                                    result = format!("{}{}", result, value);
+                                    result = format!("{result}{value}");
                                 }
-                                CalcResult::Number(value) => {
-                                    result = format!("{}{}", result, value)
-                                }
+                                CalcResult::Number(value) => result = format!("{result}{value}"),
                                 CalcResult::Boolean(value) => {
                                     if value {
-                                        result = format!("{}TRUE", result);
+                                        result = format!("{result}TRUE");
                                     } else {
-                                        result = format!("{}FALSE", result);
+                                        result = format!("{result}FALSE");
                                     }
                                 }
                                 error @ CalcResult::Error { .. } => return error,
                                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
                                 CalcResult::Range { .. } => {}
+                                CalcResult::Array(_) => {
+                                    return CalcResult::Error {
+                                        error: Error::NIMPL,
+                                        origin: cell,
+                                        message: "Arrays not supported yet".to_string(),
+                                    }
+                                }
                             }
                         }
+                    }
+                }
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
                     }
                 }
             };
@@ -125,12 +137,19 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => 0.0,
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
             let format_code = match self.get_string(&args[1], cell) {
                 Ok(s) => s,
                 Err(s) => return s,
             };
-            let d = format_number(value, &format_code, &self.locale);
+            let d = format_number(value, &format_code, self.locale);
             if let Some(_e) = d.error {
                 return CalcResult::Error {
                     error: Error::VALUE,
@@ -261,7 +280,7 @@ impl Model {
     pub(crate) fn fn_len(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() == 1 {
             let s = match self.evaluate_node_in_context(&args[0], cell) {
-                CalcResult::Number(v) => format!("{}", v),
+                CalcResult::Number(v) => format!("{v}"),
                 CalcResult::String(v) => v,
                 CalcResult::Boolean(b) => {
                     if b {
@@ -280,6 +299,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
             return CalcResult::Number(s.chars().count() as f64);
         }
@@ -289,7 +315,7 @@ impl Model {
     pub(crate) fn fn_trim(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() == 1 {
             let s = match self.evaluate_node_in_context(&args[0], cell) {
-                CalcResult::Number(v) => format!("{}", v),
+                CalcResult::Number(v) => format!("{v}"),
                 CalcResult::String(v) => v,
                 CalcResult::Boolean(b) => {
                     if b {
@@ -308,6 +334,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
             return CalcResult::String(s.trim().to_owned());
         }
@@ -317,7 +350,7 @@ impl Model {
     pub(crate) fn fn_lower(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() == 1 {
             let s = match self.evaluate_node_in_context(&args[0], cell) {
-                CalcResult::Number(v) => format!("{}", v),
+                CalcResult::Number(v) => format!("{v}"),
                 CalcResult::String(v) => v,
                 CalcResult::Boolean(b) => {
                     if b {
@@ -336,6 +369,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
             return CalcResult::String(s.to_lowercase());
         }
@@ -345,7 +385,7 @@ impl Model {
     pub(crate) fn fn_unicode(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() == 1 {
             let s = match self.evaluate_node_in_context(&args[0], cell) {
-                CalcResult::Number(v) => format!("{}", v),
+                CalcResult::Number(v) => format!("{v}"),
                 CalcResult::String(v) => v,
                 CalcResult::Boolean(b) => {
                     if b {
@@ -370,6 +410,13 @@ impl Model {
                         message: "Empty cell".to_string(),
                     }
                 }
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
 
             match s.chars().next() {
@@ -392,7 +439,7 @@ impl Model {
     pub(crate) fn fn_upper(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() == 1 {
             let s = match self.evaluate_node_in_context(&args[0], cell) {
-                CalcResult::Number(v) => format!("{}", v),
+                CalcResult::Number(v) => format!("{v}"),
                 CalcResult::String(v) => v,
                 CalcResult::Boolean(b) => {
                     if b {
@@ -411,6 +458,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
             return CalcResult::String(s.to_uppercase());
         }
@@ -422,7 +476,7 @@ impl Model {
             return CalcResult::new_args_number_error(cell);
         }
         let s = match self.evaluate_node_in_context(&args[0], cell) {
-            CalcResult::Number(v) => format!("{}", v),
+            CalcResult::Number(v) => format!("{v}"),
             CalcResult::String(v) => v,
             CalcResult::Boolean(b) => {
                 if b {
@@ -441,6 +495,13 @@ impl Model {
                 };
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+            CalcResult::Array(_) => {
+                return CalcResult::Error {
+                    error: Error::NIMPL,
+                    origin: cell,
+                    message: "Arrays not supported yet".to_string(),
+                }
+            }
         };
         let num_chars = if args.len() == 2 {
             match self.evaluate_node_in_context(&args[1], cell) {
@@ -471,6 +532,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => 0,
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             }
         } else {
             1
@@ -490,7 +558,7 @@ impl Model {
             return CalcResult::new_args_number_error(cell);
         }
         let s = match self.evaluate_node_in_context(&args[0], cell) {
-            CalcResult::Number(v) => format!("{}", v),
+            CalcResult::Number(v) => format!("{v}"),
             CalcResult::String(v) => v,
             CalcResult::Boolean(b) => {
                 if b {
@@ -509,6 +577,13 @@ impl Model {
                 };
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+            CalcResult::Array(_) => {
+                return CalcResult::Error {
+                    error: Error::NIMPL,
+                    origin: cell,
+                    message: "Arrays not supported yet".to_string(),
+                }
+            }
         };
         let num_chars = if args.len() == 2 {
             match self.evaluate_node_in_context(&args[1], cell) {
@@ -539,6 +614,13 @@ impl Model {
                     };
                 }
                 CalcResult::EmptyCell | CalcResult::EmptyArg => 0,
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             }
         } else {
             1
@@ -550,7 +632,7 @@ impl Model {
             }
             result.push(ch);
         }
-        return CalcResult::String(result.chars().rev().collect::<String>());
+        CalcResult::String(result.chars().rev().collect::<String>())
     }
 
     pub(crate) fn fn_mid(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
@@ -558,7 +640,7 @@ impl Model {
             return CalcResult::new_args_number_error(cell);
         }
         let s = match self.evaluate_node_in_context(&args[0], cell) {
-            CalcResult::Number(v) => format!("{}", v),
+            CalcResult::Number(v) => format!("{v}"),
             CalcResult::String(v) => v,
             CalcResult::Boolean(b) => {
                 if b {
@@ -577,6 +659,13 @@ impl Model {
                 };
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => "".to_string(),
+            CalcResult::Array(_) => {
+                return CalcResult::Error {
+                    error: Error::NIMPL,
+                    origin: cell,
+                    message: "Arrays not supported yet".to_string(),
+                }
+            }
         };
         let start_num = match self.evaluate_node_in_context(&args[1], cell) {
             CalcResult::Number(v) => {
@@ -641,6 +730,13 @@ impl Model {
                 };
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => 0,
+            CalcResult::Array(_) => {
+                return CalcResult::Error {
+                    error: Error::NIMPL,
+                    origin: cell,
+                    message: "Arrays not supported yet".to_string(),
+                }
+            }
         };
         let mut result = "".to_string();
         let mut count: usize = 0;
@@ -983,6 +1079,13 @@ impl Model {
                                 }
                                 error @ CalcResult::Error { .. } => return error,
                                 CalcResult::EmptyArg | CalcResult::Range { .. } => {}
+                                CalcResult::Array(_) => {
+                                    return CalcResult::Error {
+                                        error: Error::NIMPL,
+                                        origin: cell,
+                                        message: "Arrays not supported yet".to_string(),
+                                    }
+                                }
                             }
                         }
                     }
@@ -1002,6 +1105,13 @@ impl Model {
                     }
                 }
                 CalcResult::EmptyArg => {}
+                CalcResult::Array(_) => {
+                    return CalcResult::Error {
+                        error: Error::NIMPL,
+                        origin: cell,
+                        message: "Arrays not supported yet".to_string(),
+                    }
+                }
             };
         }
         let result = values.join(&delimiter);
@@ -1100,7 +1210,7 @@ impl Model {
         match self.evaluate_node_in_context(&args[0], cell) {
             CalcResult::String(text) => {
                 let currencies = vec!["$", "€"];
-                if let Ok((value, _)) = parse_formatted_number(&text, &currencies) {
+                if let Ok((value, _)) = parse_formatted_number(&text, &currencies, self.locale) {
                     return CalcResult::Number(value);
                 };
                 CalcResult::Error {
@@ -1125,6 +1235,11 @@ impl Model {
                 }
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => CalcResult::Number(0.0),
+            CalcResult::Array(_) => CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            },
         }
     }
 

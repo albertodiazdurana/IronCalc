@@ -1,7 +1,10 @@
 #![deny(missing_docs)]
 
+mod border;
+mod border_utils;
 mod common;
-mod history;
+pub(crate) mod history;
+mod sequence_detector;
 mod ui;
 
 pub use common::UserModel;

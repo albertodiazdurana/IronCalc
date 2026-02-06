@@ -1,0 +1,1987 @@
+import type { CellStyle, Model } from "@ironcalc/wasm";
+import { columnNameFromNumber } from "@ironcalc/wasm";
+import { theme } from "../../theme";
+import { getColor } from "../Editor/util";
+import type { Cell } from "../types";
+import type { WorkbookState } from "../workbookState";
+import {
+  COLUMN_WIDTH_SCALE,
+  cellPadding,
+  defaultTextColor,
+  gridColor,
+  gridSeparatorColor,
+  headerBackground,
+  headerBorderColor,
+  headerSelectedBackground,
+  headerSelectedColor,
+  headerTextColor,
+  LAST_COLUMN,
+  LAST_ROW,
+  outlineColor,
+  ROW_HEIGH_SCALE,
+} from "./constants";
+import { attachOutlineHandle } from "./outlineHandle";
+import { computeWrappedLines, hexToRGBA10Percent } from "./util";
+
+export interface CanvasSettings {
+  model: Model;
+  width: number;
+  height: number;
+  workbookState: WorkbookState;
+  elements: {
+    canvas: HTMLCanvasElement;
+    cellOutline: HTMLDivElement;
+    areaOutline: HTMLDivElement;
+    extendToOutline: HTMLDivElement;
+    columnGuide: HTMLDivElement;
+    rowGuide: HTMLDivElement;
+    columnHeaders: HTMLDivElement;
+    editor: HTMLDivElement;
+  };
+  onColumnWidthChanges: (sheet: number, column: number, width: number) => void;
+  onRowHeightChanges: (sheet: number, row: number, height: number) => void;
+  refresh: () => void;
+}
+
+export const fonts = {
+  regular: 'Inter, "Adjusted Arial Fallback", sans-serif',
+  mono: '"Fira Mono", "Adjusted Courier New Fallback", serif',
+};
+
+export const headerRowHeight = 28;
+export const headerColumnWidth = 30;
+export const devicePixelRatio = window.devicePixelRatio || 1;
+
+export const defaultCellFontFamily = fonts.regular;
+export const headerFontFamily = fonts.regular;
+export const frozenSeparatorWidth = 3;
+
+interface TextProperties {
+  row: number;
+  column: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  textColor: string;
+  font: string;
+  underlined: boolean;
+  strike: boolean;
+  lines: [string, number, number, number][];
+}
+export default class WorksheetCanvas {
+  sheetWidth: number;
+
+  sheetHeight: number;
+
+  width: number;
+
+  height: number;
+
+  ctx: CanvasRenderingContext2D;
+
+  canvas: HTMLCanvasElement;
+
+  editor: HTMLDivElement;
+
+  areaOutline: HTMLDivElement;
+
+  cellOutline: HTMLDivElement;
+
+  cellOutlineHandle: HTMLDivElement;
+
+  extendToOutline: HTMLDivElement;
+
+  workbookState: WorkbookState;
+
+  model: Model;
+
+  rowGuide: HTMLDivElement;
+
+  columnHeaders: HTMLDivElement;
+
+  columnGuide: HTMLDivElement;
+
+  onColumnWidthChanges: (sheet: number, column: number, width: number) => void;
+
+  onRowHeightChanges: (sheet: number, row: number, height: number) => void;
+
+  refresh: () => void;
+
+  cells: TextProperties[];
+  spills: Map<string, number>;
+
+  constructor(options: CanvasSettings) {
+    this.model = options.model;
+    this.sheetWidth = 0;
+    this.sheetHeight = 0;
+    this.canvas = options.elements.canvas;
+    this.width = options.width;
+    this.height = options.height;
+    this.ctx = this.setContext();
+    this.workbookState = options.workbookState;
+    this.editor = options.elements.editor;
+    this.refresh = options.refresh;
+
+    this.cellOutline = options.elements.cellOutline;
+    this.areaOutline = options.elements.areaOutline;
+    this.extendToOutline = options.elements.extendToOutline;
+    this.rowGuide = options.elements.rowGuide;
+    this.columnGuide = options.elements.columnGuide;
+    this.columnHeaders = options.elements.columnHeaders;
+
+    this.onColumnWidthChanges = options.onColumnWidthChanges;
+    this.onRowHeightChanges = options.onRowHeightChanges;
+    this.resetHeaders();
+    this.cellOutlineHandle = attachOutlineHandle(this);
+
+    // a cell marked as "spill" means its left border should be skipped
+    this.spills = new Map<string, number>();
+    this.cells = [];
+  }
+
+  setScrollPosition(scrollPosition: { left: number; top: number }): void {
+    // We ony scroll whole rows and whole columns
+    // left, top are maximized with constraints:
+    //    1. left <= scrollPosition.left
+    //    2. top <= scrollPosition.top
+    //    3. (left, top) are the absolute coordinates of a cell
+    const { column } = this.getBoundedColumn(scrollPosition.left);
+    const { row } = this.getBoundedRow(scrollPosition.top);
+    this.model.setTopLeftVisibleCell(row, column);
+  }
+
+  resetHeaders(): void {
+    for (const handle of this.columnHeaders.querySelectorAll(
+      ".column-resize-handle",
+    )) {
+      handle.remove();
+    }
+    for (const columnSeparator of this.columnHeaders.querySelectorAll(
+      ".frozen-column-separator",
+    )) {
+      columnSeparator.remove();
+    }
+    for (const header of this.columnHeaders.children) {
+      (header as HTMLDivElement).classList.add("column-header");
+    }
+  }
+
+  setContext(): CanvasRenderingContext2D {
+    const { canvas, width, height } = this;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error(
+        "This browser does not support 2-dimensional canvas rendering contexts.",
+      );
+    }
+    // If the devicePixelRatio is 2 then the canvas is twice as large to avoid blurring.
+    canvas.width = width * devicePixelRatio;
+    canvas.height = height * devicePixelRatio;
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    context.scale(devicePixelRatio, devicePixelRatio);
+    return context;
+  }
+
+  setSize(size: { width: number; height: number }): void {
+    this.width = size.width;
+    this.height = size.height;
+    this.ctx = this.setContext();
+  }
+
+  /**
+   * This is the height of the frozen rows including the width of the separator
+   * It returns 0 if the are no frozen rows
+   */
+  getFrozenRowsHeight(): number {
+    const frozenRows = this.model.getFrozenRowsCount(
+      this.model.getSelectedSheet(),
+    );
+    if (frozenRows === 0) {
+      return 0;
+    }
+    let frozenRowsHeight = 0;
+    for (let row = 1; row <= frozenRows; row += 1) {
+      frozenRowsHeight += this.getRowHeight(this.model.getSelectedSheet(), row);
+    }
+    return frozenRowsHeight + frozenSeparatorWidth;
+  }
+
+  /**
+   * This is the width of the frozen columns including the width of the separator
+   * It returns 0 if the are no frozen columns
+   */
+  getFrozenColumnsWidth(): number {
+    const frozenColumns = this.model.getFrozenColumnsCount(
+      this.model.getSelectedSheet(),
+    );
+    if (frozenColumns === 0) {
+      return 0;
+    }
+    let frozenColumnsWidth = 0;
+    for (let column = 1; column <= frozenColumns; column += 1) {
+      frozenColumnsWidth += this.getColumnWidth(
+        this.model.getSelectedSheet(),
+        column,
+      );
+    }
+    return frozenColumnsWidth + frozenSeparatorWidth;
+  }
+
+  // Get the visible cells (aside from the frozen rows and columns)
+  getVisibleCells(): {
+    topLeftCell: Cell;
+    bottomRightCell: Cell;
+  } {
+    const view = this.model.getSelectedView();
+    const selectedSheet = view.sheet;
+    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
+    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+    const rowTop = Math.max(frozenRows + 1, view.top_row);
+    let rowBottom = rowTop;
+    const columnLeft = Math.max(frozenColumns + 1, view.left_column);
+    let columnRight = columnLeft;
+    const frozenColumnsWidth = this.getFrozenColumnsWidth();
+    const frozenRowsHeight = this.getFrozenRowsHeight();
+    let y = headerRowHeight + frozenRowsHeight;
+    for (let row = rowTop; row <= LAST_ROW; row += 1) {
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      if (y >= this.height - rowHeight || row === LAST_ROW) {
+        rowBottom = row;
+        break;
+      }
+      y += rowHeight;
+    }
+
+    let x = headerColumnWidth + frozenColumnsWidth;
+    for (let column = columnLeft; column <= LAST_COLUMN; column += 1) {
+      const columnWidth = this.getColumnWidth(selectedSheet, column);
+      if (x >= this.width - columnWidth || column === LAST_COLUMN) {
+        columnRight = column;
+        break;
+      }
+      x += columnWidth;
+    }
+
+    const cells = {
+      topLeftCell: { row: rowTop, column: columnLeft },
+      bottomRightCell: { row: rowBottom, column: columnRight },
+    };
+
+    return cells;
+  }
+
+  /**
+   * Returns the {row, top} of the row whose upper y coordinate (top) is maximum and less or equal than maxTop
+   * Both top and maxTop are absolute coordinates
+   */
+  getBoundedRow(maxTop: number): { row: number; top: number } {
+    const selectedSheet = this.model.getSelectedSheet();
+    let top = 0;
+    let row = 1 + this.model.getFrozenRowsCount(selectedSheet);
+    while (row <= LAST_ROW && top <= maxTop) {
+      const height = this.getRowHeight(selectedSheet, row);
+      if (top + height <= maxTop) {
+        top += height;
+      } else {
+        break;
+      }
+      row += 1;
+    }
+    return { row, top };
+  }
+
+  private getBoundedColumn(maxLeft: number): { column: number; left: number } {
+    let left = 0;
+    const selectedSheet = this.model.getSelectedSheet();
+    let column = 1 + this.model.getFrozenColumnsCount(selectedSheet);
+    while (left <= maxLeft && column <= LAST_COLUMN) {
+      const width = this.getColumnWidth(selectedSheet, column);
+      if (width + left <= maxLeft) {
+        left += width;
+      } else {
+        break;
+      }
+      column += 1;
+    }
+    return { column, left };
+  }
+
+  /**
+   * Returns the minimum we can scroll to the left so that
+   * targetColumn is fully visible.
+   * Returns the the first visible column and the scrollLeft position
+   */
+  getMinScrollLeft(targetColumn: number): number {
+    const columnStart =
+      1 + this.model.getFrozenColumnsCount(this.model.getSelectedSheet());
+    /** Distance from the first non frozen cell to the right border of column*/
+    let distance = 0;
+    for (let column = columnStart; column <= targetColumn; column += 1) {
+      const width = this.getColumnWidth(this.model.getSelectedSheet(), column);
+      distance += width;
+    }
+    /** Minimum we need to scroll so that `column` is visible */
+    const minLeft =
+      distance - this.width + this.getFrozenColumnsWidth() + headerColumnWidth;
+
+    // Because scrolling is quantified, we only scroll whole columns,
+    // we need to find the minimum quantum that is larger than minLeft
+    let left = 0;
+    for (let column = columnStart; column <= LAST_COLUMN; column += 1) {
+      const width = this.getColumnWidth(this.model.getSelectedSheet(), column);
+      if (left < minLeft) {
+        left += width;
+      } else {
+        break;
+      }
+    }
+    return left;
+  }
+
+  private getFontStyle(style: CellStyle): {
+    font: string;
+    color: string;
+    fontSize: number;
+  } {
+    const fontSize = style.font?.sz || 13;
+    let font = `${fontSize}px ${defaultCellFontFamily}`;
+    let color = defaultTextColor;
+
+    if (style.font) {
+      color = style.font.color;
+      font = style.font.b ? `bold ${font}` : `400 ${font}`;
+      if (style.font.i) {
+        font = `italic ${font}`;
+      }
+    }
+
+    return { font, color, fontSize };
+  }
+
+  private getAlignment(
+    style: CellStyle,
+    cellType: number,
+  ): { horizontal: string; vertical: string } {
+    let horizontal = style.alignment?.horizontal || "general";
+    const vertical = style.alignment?.vertical || "bottom";
+
+    if (horizontal === "general") {
+      if (cellType === 1) {
+        horizontal = "right";
+      } else if (cellType === 4) {
+        horizontal = "center";
+      } else {
+        horizontal = "left";
+      }
+    }
+
+    return { horizontal, vertical };
+  }
+
+  // Computes the text of cells that are off the screen. They are important because their text may spill into the viewport.
+  private computeCellTextLeftRight(
+    selectedSheet: number,
+    row: number,
+    rowHeight: number,
+    topLeftCell: Cell,
+    bottomRightCell: Cell,
+  ): void {
+    const frozenColumnsCount = this.model.getFrozenColumnsCount(selectedSheet);
+    // First compute the text to the left of the viewport
+    const columnToTheLeft = this.model.getLastNonEmptyInRowBeforeColumn(
+      selectedSheet,
+      row,
+      topLeftCell.column,
+    );
+    // If it is one of the frozen columns it is already computed
+    if (columnToTheLeft && columnToTheLeft > frozenColumnsCount) {
+      const columnWidth = this.getColumnWidth(selectedSheet, columnToTheLeft);
+      const [textX, textY] = this.getCoordinatesByCell(row, columnToTheLeft);
+      this.computeCellText(
+        row,
+        columnToTheLeft,
+        textX,
+        textY,
+        columnWidth,
+        rowHeight,
+      );
+    }
+    // Compute the text to the right of the viewport
+    const columnToTheRight = this.model.getFirstNonEmptyInRowAfterColumn(
+      selectedSheet,
+      row,
+      bottomRightCell.column,
+    );
+
+    if (columnToTheRight) {
+      const columnWidth = this.getColumnWidth(selectedSheet, columnToTheRight);
+      const [textX, textY] = this.getCoordinatesByCell(row, columnToTheRight);
+      this.computeCellText(
+        row,
+        columnToTheRight,
+        textX,
+        textY,
+        columnWidth,
+        rowHeight,
+      );
+    }
+  }
+
+  // Goes through all the visible cells and computes their text properties
+  private computeCellsText(): void {
+    const { topLeftCell, bottomRightCell } = this.getVisibleCells();
+    const selectedSheet = this.model.getSelectedSheet();
+
+    this.cells = [];
+
+    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
+
+    // Top-left-pane
+    let x = headerColumnWidth + 0.5;
+    let y = headerRowHeight + 0.5;
+    for (let row = 1; row <= frozenRows; row += 1) {
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      this.computeCellTextLeftRight(
+        selectedSheet,
+        row,
+        rowHeight,
+        topLeftCell,
+        bottomRightCell,
+      );
+
+      x = headerColumnWidth + 0.5;
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.computeCellText(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+    if (frozenRows === 0 && frozenColumns !== 0) {
+      x = headerColumnWidth + 0.5;
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        x += this.getColumnWidth(selectedSheet, column);
+      }
+    }
+
+    // If there are frozen rows draw a separator
+    if (frozenRows) {
+      y += frozenSeparatorWidth;
+    }
+
+    // If there are frozen columns draw a separator
+    if (frozenColumns) {
+      x += frozenSeparatorWidth;
+    }
+
+    const frozenX = x;
+    const frozenY = y;
+    // Top-right pane
+    y = headerRowHeight + 0.5;
+    for (let row = 1; row <= frozenRows; row += 1) {
+      x = frozenX;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      for (
+        let { column } = topLeftCell;
+        column <= bottomRightCell.column;
+        column += 1
+      ) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.computeCellText(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+
+    // Bottom-left pane
+    y = frozenY;
+    for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+      x = headerColumnWidth;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+
+      this.computeCellTextLeftRight(
+        selectedSheet,
+        row,
+        rowHeight,
+        topLeftCell,
+        bottomRightCell,
+      );
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.computeCellText(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+
+    // Bottom-right pane
+    y = frozenY;
+    for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+      x = frozenX;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+
+      for (
+        let { column } = topLeftCell;
+        column <= bottomRightCell.column;
+        column += 1
+      ) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.computeCellText(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+  }
+
+  // Compute the text properties for a cell
+  private computeCellText(
+    row: number,
+    column: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ) {
+    const selectedSheet = this.model.getSelectedSheet();
+
+    const style = this.model.getCellStyle(selectedSheet, row, column);
+
+    const { font, color: textColor, fontSize } = this.getFontStyle(style);
+
+    // Number = 1,
+    // Text = 2,
+    // LogicalValue = 4,
+    // ErrorValue = 16,
+    // Array = 64,
+    // CompoundData = 128,
+    const cellType = this.model.getCellType(selectedSheet, row, column);
+    const { horizontal: horizontalAlign, vertical: verticalAlign } =
+      this.getAlignment(style, cellType);
+
+    const wrapText = style.alignment?.wrap_text || false;
+
+    const context = this.ctx;
+    context.font = font;
+    context.fillStyle = textColor;
+    const fullText = this.model.getFormattedCellValue(
+      selectedSheet,
+      row,
+      column,
+    );
+
+    // Is there any better to determine the line height?
+    const lineHeight = fontSize * 1.5;
+    const lines = computeWrappedLines(
+      fullText,
+      wrapText,
+      context,
+      width - cellPadding,
+    );
+    const lineCount = lines.length;
+    let maxWidth = 0;
+    let minX = x;
+    let maxX = x + width;
+    const textProperties = {
+      row,
+      column,
+      x: minX,
+      y,
+      width,
+      height,
+      fontSize,
+      textColor,
+      font,
+      underlined: style.font?.u || false,
+      strike: style.font?.strike || false,
+      lines: [] as [string, number, number, number][],
+    };
+
+    lines.forEach((text, line) => {
+      const textWidth = context.measureText(text).width;
+      let textX: number;
+      let textY: number;
+      // The idea is that in the present font-size and default row heigh,
+      // top/bottom and center horizontalAlign coincide
+      const verticalPadding = 4;
+      if (horizontalAlign === "right") {
+        textX = width - cellPadding + x - textWidth / 2;
+      } else if (horizontalAlign === "center") {
+        textX = x + width / 2;
+      } else {
+        // left aligned
+        textX = cellPadding + x + textWidth / 2;
+      }
+      if (verticalAlign === "bottom") {
+        textY =
+          y +
+          height -
+          fontSize / 2 -
+          verticalPadding +
+          (line - lineCount + 1) * lineHeight;
+      } else if (verticalAlign === "center") {
+        textY = y + height / 2 + (line + (1 - lineCount) / 2) * lineHeight;
+      } else {
+        // aligned top
+        textY = y + fontSize / 2 + verticalPadding + line * lineHeight;
+      }
+      textProperties.lines.push([text, textX, textY, textWidth]);
+      minX = Math.min(minX, textX - textWidth / 2);
+      maxX = Math.max(maxX, textX + textWidth / 2);
+      maxWidth = Math.max(maxWidth, textX + textWidth / 2 - x);
+    });
+    // we need to see if the text spills to the right of the cell
+    let leftColumnX = x;
+    let rightColumnX = x + width;
+    if (
+      maxX > rightColumnX &&
+      column < LAST_COLUMN &&
+      this.model.getFormattedCellValue(selectedSheet, row, column + 1) === ""
+    ) {
+      let spillColumn = column + 1;
+      // Keep expanding the spill to the right until:
+      // 1. There is a non-empty cell
+      // 2. Reaches the end of the row
+      // 3. There is the end of frozen columns
+      const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+      while (
+        rightColumnX < maxX &&
+        this.model.getFormattedCellValue(selectedSheet, row, spillColumn) ===
+          "" &&
+        spillColumn <= LAST_COLUMN &&
+        ((column < frozenColumns && spillColumn <= frozenColumns) ||
+          column > frozenColumns)
+      ) {
+        rightColumnX += this.model.getColumnWidth(selectedSheet, spillColumn);
+        // marks (row, spillColumn) as spilling so we don't draw a border to the left
+        this.spills.set(`${row}-${spillColumn}`, 1);
+        spillColumn += 1;
+      }
+    }
+    // Same thing in the other direction, to the left of the cell
+    const frozenColumnsCount = this.model.getFrozenColumnsCount(selectedSheet);
+    if (
+      minX < leftColumnX &&
+      column > 1 &&
+      this.model.getFormattedCellValue(selectedSheet, row, column - 1) === ""
+    ) {
+      let spillColumn = column - 1;
+      // Keep expanding the spill to the left until:
+      // 1. There is a non-empty cell
+      // 2. Reaches the beginning of the row
+      // 3. There is the end of frozen columns
+      while (
+        leftColumnX > minX &&
+        this.model.getFormattedCellValue(selectedSheet, row, spillColumn) ===
+          "" &&
+        spillColumn >= 1 &&
+        ((column <= frozenColumnsCount && spillColumn <= frozenColumnsCount) ||
+          column > frozenColumnsCount)
+      ) {
+        leftColumnX -= this.getColumnWidth(selectedSheet, spillColumn);
+        // This is tricky but correct. The reason is we only draw the left borders of the cells
+        // (because the left border of a cell MUST be the right border of the one to the left).
+        // So if we want to remove the right border of this cell we need to skip the left border of the next.
+        this.spills.set(`${row}-${spillColumn + 1}`, 1);
+        spillColumn -= 1;
+      }
+    }
+
+    if (frozenColumnsCount > 0) {
+      const frozenColumnsX =
+        this.getCoordinatesByCell(row, frozenColumnsCount)[0] +
+        this.getColumnWidth(selectedSheet, frozenColumnsCount);
+      if (column > frozenColumnsCount) {
+        leftColumnX = Math.max(leftColumnX, frozenColumnsX);
+      } else {
+        rightColumnX = Math.min(rightColumnX, frozenColumnsX);
+      }
+    }
+    textProperties.x = leftColumnX;
+    textProperties.width = rightColumnX - leftColumnX;
+    this.cells.push(textProperties);
+  }
+
+  /// Draws a single line from (x1,y1) to (x2,y2) using current stroke style/width.
+  private drawBorderLine(
+    context: CanvasRenderingContext2D,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): void {
+    context.beginPath();
+    context.moveTo(x1, y1);
+    context.lineTo(x2, y2);
+    context.stroke();
+  }
+
+  /// Helper function to draw a border with different styles
+  private drawBorder(
+    context: CanvasRenderingContext2D,
+    style: string,
+    color: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    isVertical: boolean,
+  ): void {
+    context.save();
+    context.strokeStyle = color;
+
+    switch (style) {
+      case "thin":
+        context.lineWidth = 1;
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        break;
+      case "medium":
+        context.lineWidth = 2;
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        break;
+      case "thick":
+        context.lineWidth = 3;
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        break;
+      case "double":
+        // Draw two parallel lines
+        context.lineWidth = 1;
+        if (isVertical) {
+          this.drawBorderLine(context, x1 - 1, y1, x1 - 1, y2);
+          this.drawBorderLine(context, x1 + 1, y1, x1 + 1, y2);
+        } else {
+          this.drawBorderLine(context, x1, y1 - 1, x2, y1 - 1);
+          this.drawBorderLine(context, x1, y1 + 1, x2, y1 + 1);
+        }
+        break;
+      case "dotted":
+        context.lineWidth = 1;
+        context.setLineDash([1, 2]);
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        context.setLineDash([]);
+        break;
+      case "mediumdashed":
+        context.lineWidth = 2;
+        context.setLineDash([4, 2]);
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        context.setLineDash([]);
+        break;
+      case "slantdashdot":
+        context.lineWidth = 1;
+        context.setLineDash([4, 2, 1, 2]);
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        context.setLineDash([]);
+        break;
+      case "mediumdashdot":
+        context.lineWidth = 2;
+        context.setLineDash([4, 2, 1, 2]);
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        context.setLineDash([]);
+        break;
+      case "mediumdashdotdot":
+        context.lineWidth = 2;
+        context.setLineDash([4, 2, 1, 2, 1, 2]);
+        this.drawBorderLine(context, x1, y1, x2, y2);
+        context.setLineDash([]);
+        break;
+    }
+    context.restore();
+  }
+
+  /// Renders the cell style: colors, borders, etc. But not the text.
+  private renderCellStyle(
+    row: number,
+    column: number,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    const selectedSheet = this.model.getSelectedSheet();
+    const style = this.model.getCellStyle(selectedSheet, row, column);
+
+    // first the background
+    let backgroundColor = theme.palette.common.white;
+    if (style.fill.fg_color) {
+      backgroundColor = style.fill.fg_color;
+    }
+    const cellGridColor = this.model.getShowGridLines(selectedSheet)
+      ? gridColor
+      : backgroundColor;
+    const context = this.ctx;
+    context.fillStyle = backgroundColor;
+    context.fillRect(x, y, width, height);
+
+    // Let's do the border
+    // Algorithm:
+    //  * we use the border if present
+    //  * otherwise we use the border of the adjacent cell
+    //  * otherwise we use the color of the background
+    //  * otherwise we use the background color of the adjacent cell
+    //  * if everything else fails we use the default grid color
+    // We only set the left and top borders (right and bottom are set later)
+    const border = style.border;
+
+    // we skip don't draw a left border if it is marked as a "spill cell"
+    if (this.spills.get(`${row}-${column}`) !== 1) {
+      let borderLeftColor = cellGridColor;
+      let borderLeftStyle = "thin";
+      if (border.left) {
+        borderLeftColor = border.left.color;
+        borderLeftStyle = border.left.style;
+      } else {
+        const leftStyle = this.model.getCellStyle(
+          selectedSheet,
+          row,
+          column - 1,
+        );
+        if (leftStyle.border.right) {
+          borderLeftColor = leftStyle.border.right.color;
+          borderLeftStyle = leftStyle.border.right.style;
+        } else if (style.fill.fg_color) {
+          borderLeftColor = style.fill.fg_color;
+        } else if (leftStyle.fill.fg_color) {
+          borderLeftColor = leftStyle.fill.fg_color;
+        }
+      }
+
+      this.drawBorder(
+        context,
+        borderLeftStyle,
+        borderLeftColor,
+        x,
+        y,
+        x,
+        y + height,
+        true,
+      );
+    }
+
+    let borderTopColor = cellGridColor;
+    let borderTopStyle = "thin";
+    if (border.top) {
+      borderTopColor = border.top.color;
+      borderTopStyle = border.top.style;
+    } else {
+      const topStyle = this.model.getCellStyle(selectedSheet, row - 1, column);
+      if (topStyle.border.bottom) {
+        borderTopColor = topStyle.border.bottom.color;
+        borderTopStyle = topStyle.border.bottom.style;
+      } else if (style.fill.fg_color) {
+        borderTopColor = style.fill.fg_color;
+      } else if (topStyle.fill.fg_color) {
+        borderTopColor = topStyle.fill.fg_color;
+      }
+    }
+    this.drawBorder(
+      context,
+      borderTopStyle,
+      borderTopColor,
+      x,
+      y,
+      x + width,
+      y,
+      false,
+    );
+  }
+
+  /// Renders the text in the cell.
+  private renderCellText(textProperties: TextProperties) {
+    const {
+      x,
+      y,
+      width,
+      height,
+      font,
+      underlined,
+      strike,
+      fontSize,
+      textColor,
+      lines,
+    } = textProperties;
+    const context = this.ctx;
+
+    context.font = font;
+    context.fillStyle = textColor;
+    // Create a rectangular clipping region
+    context.save();
+    context.beginPath();
+    context.rect(x, y, width, height);
+    context.clip();
+
+    lines.forEach((line, _) => {
+      const [textContent, textX, textY, textWidth] = line;
+      context.fillText(textContent, textX, textY);
+
+      if (underlined) {
+        // There are no text-decoration in canvas. You have to do the underline yourself.
+        const offset = Math.floor(fontSize / 2);
+        context.beginPath();
+        context.strokeStyle = textColor;
+        context.lineWidth = 1;
+        context.moveTo(textX - textWidth / 2, textY + offset);
+        context.lineTo(textX + textWidth / 2, textY + offset);
+        context.stroke();
+      }
+      if (strike) {
+        // There are no text-decoration in canvas. You have to do the strikethrough yourself.
+        context.beginPath();
+        context.strokeStyle = textColor;
+        context.lineWidth = 1;
+        context.moveTo(textX - textWidth / 2, textY);
+        context.lineTo(textX + textWidth / 2, textY);
+        context.stroke();
+      }
+    });
+    context.restore();
+  }
+
+  // Column and row headers with their handles
+  private addColumnResizeHandle(
+    x: number,
+    column: number,
+    columnWidth: number,
+  ): void {
+    const div = document.createElement("div");
+    div.className = "column-resize-handle";
+    div.style.left = `${x - 1}px`;
+    div.style.height = `${headerRowHeight}px`;
+    this.columnHeaders.insertBefore(div, null);
+
+    let initPageX = 0;
+    const resizeHandleMove = (event: MouseEvent): void => {
+      if (columnWidth + event.pageX - initPageX > 0) {
+        div.style.left = `${x + event.pageX - initPageX - 1}px`;
+        this.columnGuide.style.left = `${
+          headerColumnWidth + x + event.pageX - initPageX
+        }px`;
+      }
+    };
+    let resizeHandleUp = (event: MouseEvent): void => {
+      div.style.opacity = "0";
+      this.columnGuide.style.display = "none";
+      document.removeEventListener("pointermove", resizeHandleMove);
+      document.removeEventListener("pointerup", resizeHandleUp);
+      const newColumnWidth = columnWidth + event.pageX - initPageX;
+      if (newColumnWidth !== columnWidth) {
+        this.onColumnWidthChanges(
+          this.model.getSelectedSheet(),
+          column,
+          newColumnWidth,
+        );
+      }
+    };
+    resizeHandleUp = resizeHandleUp.bind(this);
+    div.addEventListener("pointerdown", (event) => {
+      div.style.opacity = "1";
+      this.columnGuide.style.display = "block";
+      this.columnGuide.style.left = `${headerColumnWidth + x}px`;
+      initPageX = event.pageX;
+      document.addEventListener("pointermove", resizeHandleMove);
+      document.addEventListener("pointerup", resizeHandleUp);
+    });
+
+    div.addEventListener("dblclick", (event) => {
+      // This is tough. We should have a call like this.model.setAutofitColumn(sheet, column)
+      // but we can't do that because the back end knows nothing about the rendering engine.
+      const sheet = this.model.getSelectedSheet();
+      const rows = this.model.getRowsWithData(sheet, column);
+      let width = 0;
+      for (const row of rows) {
+        const fullText = this.model.getFormattedCellValue(sheet, row, column);
+        if (fullText === "") {
+          continue;
+        }
+        const style = this.model.getCellStyle(sheet, row, column);
+        const fontSize = style.font.sz;
+        let font = `${fontSize}px ${defaultCellFontFamily}`;
+        font = style.font.b ? `bold ${font}` : `400 ${font}`;
+        this.ctx.font = font;
+        const lines = fullText.split("\n");
+        for (const line of lines) {
+          const textWidth = this.ctx.measureText(line).width;
+          width = Math.max(width, textWidth);
+        }
+      }
+      // If the width is 0, we do nothing
+      if (width !== 0) {
+        // The +8 is so that the text is in the same position regardless of the horizontal alignment
+        this.model.setColumnsWidth(sheet, column, column, width + 8);
+        this.refresh();
+      }
+      event.stopPropagation();
+    });
+  }
+
+  private addRowResizeHandle(y: number, row: number, rowHeight: number): void {
+    const div = document.createElement("div");
+    div.className = "row-resize-handle";
+    div.style.top = `${y - 1}px`;
+    div.style.width = `${headerColumnWidth}px`;
+    const sheet = this.model.getSelectedSheet();
+    this.canvas.parentElement?.insertBefore(div, null);
+    let initPageY = 0;
+    /* istanbul ignore next */
+    const resizeHandleMove = (event: MouseEvent): void => {
+      if (rowHeight + event.pageY - initPageY > 0) {
+        div.style.top = `${y + event.pageY - initPageY - 1}px`;
+        this.rowGuide.style.top = `${y + event.pageY - initPageY}px`;
+      }
+    };
+    let resizeHandleUp = (event: MouseEvent): void => {
+      div.style.opacity = "0";
+      this.rowGuide.style.display = "none";
+      document.removeEventListener("pointermove", resizeHandleMove);
+      document.removeEventListener("pointerup", resizeHandleUp);
+      const newRowHeight = rowHeight + event.pageY - initPageY;
+      if (newRowHeight !== rowHeight) {
+        this.onRowHeightChanges(sheet, row, newRowHeight);
+      }
+    };
+    resizeHandleUp = resizeHandleUp.bind(this);
+    /* istanbul ignore next */
+    div.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+      div.style.opacity = "1";
+      this.rowGuide.style.display = "block";
+      this.rowGuide.style.top = `${y}px`;
+      initPageY = event.pageY;
+      document.addEventListener("pointermove", resizeHandleMove);
+      document.addEventListener("pointerup", resizeHandleUp);
+    });
+
+    div.addEventListener("dblclick", (event) => {
+      // This is tough. We should have a call like this.model.setAutofitRow(sheet, row)
+      // but we can't do that because the back end knows nothing about the rendering engine.
+      const sheet = this.model.getSelectedSheet();
+      const columns = this.model.getColumnsWithData(sheet, row);
+      let height = 0;
+      for (const column of columns) {
+        const fullText = this.model.getFormattedCellValue(sheet, row, column);
+        if (fullText === "") {
+          continue;
+        }
+        const width = this.getColumnWidth(sheet, column);
+        const style = this.model.getCellStyle(sheet, row, column);
+        const fontSize = style.font.sz;
+        const lineHeight = fontSize * 1.5;
+        let font = `${fontSize}px ${defaultCellFontFamily}`;
+        font = style.font.b ? `bold ${font}` : `400 ${font}`;
+        this.ctx.font = font;
+        const lines = computeWrappedLines(
+          fullText,
+          style.alignment?.wrap_text || false,
+          this.ctx,
+          width,
+        );
+        const lineCount = lines.length;
+        // This is computed so that the y position of the text is independent of the vertical alignment
+        const textHeight = (lineCount - 1) * lineHeight + 8 + fontSize;
+        height = Math.max(height, textHeight);
+      }
+      // If the height is 0, we do nothing
+      if (height !== 0) {
+        this.model.setRowsHeight(sheet, row, row, height);
+        this.refresh();
+      }
+      event.stopPropagation();
+    });
+  }
+
+  private styleColumnHeader(
+    width: number,
+    div: HTMLDivElement,
+    selected: boolean,
+    isFullColumnSelected: boolean,
+  ): void {
+    div.style.boxSizing = "border-box";
+    div.style.width = `${width}px`;
+    div.style.height = `${headerRowHeight}px`;
+    div.style.backgroundColor = selected
+      ? isFullColumnSelected
+        ? theme.palette.primary.main
+        : headerSelectedBackground
+      : headerBackground;
+    div.style.color = selected
+      ? isFullColumnSelected
+        ? theme.palette.common.white
+        : headerSelectedColor
+      : headerTextColor;
+    div.style.fontWeight = "bold";
+    div.style.borderLeft = `1px solid ${headerBorderColor}`;
+    div.style.borderTop = `1px solid ${headerBorderColor}`;
+    if (selected) {
+      div.style.borderBottom = `1px solid ${outlineColor}`;
+      div.classList.add("selected");
+    } else {
+      div.classList.remove("selected");
+    }
+  }
+
+  private removeHandles(): void {
+    const root = this.canvas.parentElement;
+    if (root) {
+      for (const handle of root.querySelectorAll(".row-resize-handle"))
+        handle.remove();
+    }
+  }
+
+  private renderRowHeaders(
+    frozenRows: number,
+    topLeftCell: Cell,
+    bottomRightCell: Cell,
+  ): void {
+    const { sheet: selectedSheet, range } = this.model.getSelectedView();
+    let rowStart = range[0];
+    let rowEnd = range[2];
+    let columnStart = range[1];
+    let columnEnd = range[3];
+    if (rowStart > rowEnd) {
+      [rowStart, rowEnd] = [rowEnd, rowStart];
+    }
+    if (columnStart > columnEnd) {
+      [columnStart, columnEnd] = [columnEnd, columnStart];
+    }
+    const isFullRowSelected = columnStart === 1 && columnEnd === LAST_COLUMN;
+    const context = this.ctx;
+
+    let topLeftCornerY = headerRowHeight + 0.5;
+    const firstRow = frozenRows === 0 ? topLeftCell.row : 1;
+
+    for (let row = firstRow; row <= bottomRightCell.row; row += 1) {
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      const selected = row >= rowStart && row <= rowEnd;
+      context.fillStyle = headerBorderColor;
+      context.fillRect(0.5, topLeftCornerY, headerColumnWidth, rowHeight);
+      context.fillStyle = selected
+        ? isFullRowSelected
+          ? theme.palette.primary.main
+          : headerSelectedBackground
+        : headerBackground;
+      context.fillRect(
+        0.5,
+        topLeftCornerY + 0.5,
+        headerColumnWidth,
+        rowHeight - 1,
+      );
+      if (selected) {
+        context.fillStyle = outlineColor;
+        context.fillRect(headerColumnWidth - 1, topLeftCornerY, 1, rowHeight);
+      }
+      context.fillStyle = selected
+        ? isFullRowSelected
+          ? theme.palette.common.white
+          : headerSelectedColor
+        : headerTextColor;
+      context.font = `bold 12px ${defaultCellFontFamily}`;
+      context.fillText(
+        `${row}`,
+        headerColumnWidth / 2,
+        topLeftCornerY + rowHeight / 2,
+        headerColumnWidth,
+      );
+      topLeftCornerY += rowHeight;
+      this.addRowResizeHandle(topLeftCornerY, row, rowHeight);
+      if (row === frozenRows) {
+        topLeftCornerY += frozenSeparatorWidth;
+        row = topLeftCell.row - 1;
+      }
+    }
+  }
+
+  private renderColumnHeaders(
+    frozenColumns: number,
+    firstColumn: number,
+    lastColumn: number,
+  ): void {
+    const { columnHeaders } = this;
+    let deltaX = 0;
+    const { range } = this.model.getSelectedView();
+    let rowStart = range[0];
+    let rowEnd = range[2];
+    let columnStart = range[1];
+    let columnEnd = range[3];
+    if (columnStart > columnEnd) {
+      [columnStart, columnEnd] = [columnEnd, columnStart];
+    }
+    if (rowStart > rowEnd) {
+      [rowStart, rowEnd] = [rowEnd, rowStart];
+    }
+    const isFullColumnSelected = rowStart === 1 && rowEnd === LAST_ROW;
+    for (const header of columnHeaders.querySelectorAll(".column-header"))
+      header.remove();
+    for (const handle of columnHeaders.querySelectorAll(
+      ".column-resize-handle",
+    ))
+      handle.remove();
+    for (const separator of columnHeaders.querySelectorAll(
+      ".frozen-column-separator",
+    ))
+      separator.remove();
+    columnHeaders.style.fontFamily = headerFontFamily;
+    columnHeaders.style.fontSize = "12px";
+    columnHeaders.style.height = `${headerRowHeight}px`;
+    columnHeaders.style.lineHeight = `${headerRowHeight}px`;
+    columnHeaders.style.left = `${headerColumnWidth}px`;
+
+    // Frozen headers
+    for (let column = 1; column <= frozenColumns; column += 1) {
+      const selected = column >= columnStart && column <= columnEnd;
+      deltaX += this.addColumnHeader(
+        deltaX,
+        column,
+        selected,
+        isFullColumnSelected,
+      );
+    }
+
+    if (frozenColumns !== 0) {
+      const div = document.createElement("div");
+      div.className = "frozen-column-separator";
+      div.style.width = `${frozenSeparatorWidth}px`;
+      div.style.height = `${headerRowHeight}`;
+      div.style.display = "inline-block";
+      div.style.backgroundColor = gridSeparatorColor;
+      this.columnHeaders.insertBefore(div, null);
+      deltaX += frozenSeparatorWidth;
+    }
+
+    for (let column = firstColumn; column <= lastColumn; column += 1) {
+      const selected = column >= columnStart && column <= columnEnd;
+      deltaX += this.addColumnHeader(
+        deltaX,
+        column,
+        selected,
+        isFullColumnSelected,
+      );
+    }
+
+    columnHeaders.style.width = `${deltaX}px`;
+  }
+
+  private addColumnHeader(
+    deltaX: number,
+    column: number,
+    selected: boolean,
+    isFullColumnSelected: boolean,
+  ): number {
+    const columnWidth = this.getColumnWidth(
+      this.model.getSelectedSheet(),
+      column,
+    );
+    const div = document.createElement("div");
+    div.className = "column-header";
+    div.textContent = columnNameFromNumber(column);
+    this.columnHeaders.insertBefore(div, null);
+
+    this.styleColumnHeader(columnWidth, div, selected, isFullColumnSelected);
+    this.addColumnResizeHandle(deltaX + columnWidth, column, columnWidth);
+    return columnWidth;
+  }
+
+  getSheetDimensions(): [number, number] {
+    let x = headerColumnWidth;
+    for (let column = 1; column < LAST_COLUMN + 1; column += 1) {
+      x += this.getColumnWidth(this.model.getSelectedSheet(), column);
+    }
+    let y = headerRowHeight;
+    for (let row = 1; row < LAST_ROW + 1; row += 1) {
+      y += this.getRowHeight(this.model.getSelectedSheet(), row);
+    }
+    this.sheetWidth = Math.floor(
+      x + this.getColumnWidth(this.model.getSelectedSheet(), LAST_COLUMN),
+    );
+    this.sheetHeight = Math.floor(
+      y + 2 * this.getRowHeight(this.model.getSelectedSheet(), LAST_ROW),
+    );
+    return [this.sheetWidth, this.sheetHeight];
+  }
+
+  /**
+   * Returns the css clip in the canvas of an html element
+   * This is used so we do not see the outlines in the row and column headers
+   * NB: A _different_ (better!) approach would be to have separate canvases for the headers
+   * Then the sheet canvas would have it's own bounding box.
+   * That's tomorrows problem.
+   * PS: Please, do not use this function. If at all we can use the clip-path property
+   */
+  private getClipCSS(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    includeFrozenRows: boolean,
+    includeFrozenColumns: boolean,
+  ): string {
+    if (!includeFrozenRows && !includeFrozenColumns) {
+      return "";
+    }
+    const frozenColumnsWidth = includeFrozenColumns
+      ? this.getFrozenColumnsWidth()
+      : 0;
+    const frozenRowsHeight = includeFrozenRows ? this.getFrozenRowsHeight() : 0;
+    const yMinCanvas = headerRowHeight + frozenRowsHeight;
+    const xMinCanvas = headerColumnWidth + frozenColumnsWidth;
+
+    const xMaxCanvas =
+      xMinCanvas + this.width - headerColumnWidth - frozenColumnsWidth;
+    const yMaxCanvas =
+      yMinCanvas + this.height - headerRowHeight - frozenRowsHeight;
+
+    const topClip = y < yMinCanvas ? yMinCanvas - y : 0;
+    const leftClip = x < xMinCanvas ? xMinCanvas - x : 0;
+
+    // We don't strictly need to clip on the right and bottom edges because
+    // text is hidden anyway
+    const rightClip = x + width > xMaxCanvas ? xMaxCanvas - x : width + 4;
+    const bottomClip = y + height > yMaxCanvas ? yMaxCanvas - y : height + 4;
+    return `rect(${topClip}px ${rightClip}px ${bottomClip}px ${leftClip}px)`;
+  }
+
+  private getAreaDimensions(
+    startRow: number,
+    startColumn: number,
+    endRow: number,
+    endColumn: number,
+  ): [number, number] {
+    const [xStart, yStart] = this.getCoordinatesByCell(startRow, startColumn);
+    let [xEnd, yEnd] = this.getCoordinatesByCell(endRow, endColumn);
+    xEnd += this.getColumnWidth(this.model.getSelectedSheet(), endColumn);
+    yEnd += this.getRowHeight(this.model.getSelectedSheet(), endRow);
+    const frozenRows = this.model.getFrozenRowsCount(
+      this.model.getSelectedSheet(),
+    );
+    const frozenColumns = this.model.getFrozenColumnsCount(
+      this.model.getSelectedSheet(),
+    );
+    if (frozenRows !== 0 || frozenColumns !== 0) {
+      let [xFrozenEnd, yFrozenEnd] = this.getCoordinatesByCell(
+        frozenRows,
+        frozenColumns,
+      );
+      if (frozenColumns > 0) {
+        xFrozenEnd += this.getColumnWidth(
+          this.model.getSelectedSheet(),
+          frozenColumns,
+        );
+      }
+      if (frozenRows > 0) {
+        yFrozenEnd += this.getRowHeight(
+          this.model.getSelectedSheet(),
+          frozenRows,
+        );
+      }
+      if (startRow <= frozenRows && endRow > frozenRows) {
+        yEnd = Math.max(yEnd, yFrozenEnd);
+      }
+      if (startColumn <= frozenColumns && endColumn > frozenColumns) {
+        xEnd = Math.max(xEnd, xFrozenEnd);
+      }
+    }
+    return [Math.abs(xEnd - xStart), Math.abs(yEnd - yStart)];
+  }
+
+  /**
+   * Returns the coordinates relative to the canvas.
+   * (headerColumnWidth, headerRowHeight) being the coordinates
+   * for the top left corner of the first visible cell
+   */
+  getCoordinatesByCell(row: number, column: number): [number, number] {
+    const selectedSheet = this.model.getSelectedSheet();
+    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+    const frozenColumnsWidth = this.getFrozenColumnsWidth();
+    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
+    const frozenRowsHeight = this.getFrozenRowsHeight();
+    const { topLeftCell } = this.getVisibleCells();
+    let x: number;
+    let y: number;
+    if (row <= frozenRows) {
+      // row is one of the frozen rows
+      y = headerRowHeight;
+      for (let r = 1; r < row; r += 1) {
+        y += this.getRowHeight(selectedSheet, r);
+      }
+    } else if (row >= topLeftCell.row) {
+      // row is bellow the frozen rows
+      y = headerRowHeight + frozenRowsHeight;
+      for (let r = topLeftCell.row; r < row; r += 1) {
+        y += this.getRowHeight(selectedSheet, r);
+      }
+    } else {
+      // row is _above_ the frozen rows
+      y = headerRowHeight + frozenRowsHeight;
+      for (let r = topLeftCell.row; r > row; r -= 1) {
+        y -= this.getRowHeight(selectedSheet, r - 1);
+      }
+    }
+    if (column <= frozenColumns) {
+      // It is one of the frozen columns
+      x = headerColumnWidth;
+      for (let c = 1; c < column; c += 1) {
+        x += this.getColumnWidth(selectedSheet, c);
+      }
+    } else if (column >= topLeftCell.column) {
+      // column is to the right of the frozen columns
+      x = headerColumnWidth + frozenColumnsWidth;
+      for (let c = topLeftCell.column; c < column; c += 1) {
+        x += this.getColumnWidth(selectedSheet, c);
+      }
+    } else {
+      // column is to the left of the frozen columns
+      x = headerColumnWidth + frozenColumnsWidth;
+      for (let c = topLeftCell.column; c > column; c -= 1) {
+        x -= this.getColumnWidth(selectedSheet, c - 1);
+      }
+    }
+    return [Math.floor(x), Math.floor(y)];
+  }
+
+  /**
+   * (x, y) are the relative coordinates of a cell WRT the canvas
+   * getCellByCoordinates(headerColumnWidth, headerRowHeight) will return the first visible cell.
+   * Note: If there are frozen rows/columns for some particular coordinates (x, y)
+   * there might be two cells. This method returns the visible one.
+   */
+  getCellByCoordinates(
+    x: number,
+    y: number,
+  ): { row: number; column: number } | null {
+    const frozenColumns = this.model.getFrozenColumnsCount(
+      this.model.getSelectedSheet(),
+    );
+    const frozenColumnsWidth = this.getFrozenColumnsWidth();
+    const frozenRows = this.model.getFrozenRowsCount(
+      this.model.getSelectedSheet(),
+    );
+    const frozenRowsHeight = this.getFrozenRowsHeight();
+    let column = 0;
+    let cellX = headerColumnWidth;
+    const { topLeftCell } = this.getVisibleCells();
+    if (x < headerColumnWidth) {
+      column = topLeftCell.column;
+      while (cellX >= x) {
+        column -= 1;
+        if (column < 1) {
+          column = 1;
+          break;
+        }
+        cellX -= this.getColumnWidth(this.model.getSelectedSheet(), column);
+      }
+    } else if (x < headerColumnWidth + frozenColumnsWidth) {
+      while (cellX <= x) {
+        column += 1;
+        cellX += this.getColumnWidth(this.model.getSelectedSheet(), column);
+        // This cannot happen (would mean cellX > headerColumnWidth + frozenColumnsWidth)
+        if (column > frozenColumns) {
+          /* istanbul ignore next */
+          return null;
+        }
+      }
+    } else {
+      cellX = headerColumnWidth + frozenColumnsWidth;
+      column = topLeftCell.column - 1;
+      while (cellX <= x) {
+        column += 1;
+        if (column > LAST_COLUMN) {
+          return null;
+        }
+        cellX += this.getColumnWidth(this.model.getSelectedSheet(), column);
+      }
+    }
+    let cellY = headerRowHeight;
+    let row = 0;
+    if (y < headerRowHeight) {
+      row = topLeftCell.row;
+      while (cellY >= y) {
+        row -= 1;
+        if (row < 1) {
+          row = 1;
+          break;
+        }
+        cellY -= this.getRowHeight(this.model.getSelectedSheet(), row);
+      }
+    } else if (y < headerRowHeight + frozenRowsHeight) {
+      while (cellY <= y) {
+        row += 1;
+        cellY += this.getRowHeight(this.model.getSelectedSheet(), row);
+        // This cannot happen (would mean cellY > headerRowHeight + frozenRowsHeight)
+        if (row > frozenRows) {
+          /* istanbul ignore next */
+          return null;
+        }
+      }
+    } else {
+      cellY = headerRowHeight + frozenRowsHeight;
+      row = topLeftCell.row - 1;
+      while (cellY <= y) {
+        row += 1;
+        if (row > LAST_ROW) {
+          row = LAST_ROW;
+          break;
+        }
+        cellY += this.getRowHeight(this.model.getSelectedSheet(), row);
+      }
+    }
+    if (row < 1) row = 1;
+    if (column < 1) column = 1;
+    return { row, column };
+  }
+
+  private drawExtendToArea(): void {
+    const { extendToOutline } = this;
+    const extendToArea = this.workbookState.getExtendToArea();
+    if (extendToArea === null) {
+      extendToOutline.style.visibility = "hidden";
+      return;
+    }
+    extendToOutline.style.visibility = "visible";
+
+    let { rowStart, rowEnd, columnStart, columnEnd } = extendToArea;
+    if (rowStart > rowEnd) {
+      [rowStart, rowEnd] = [rowEnd, rowStart];
+    }
+    if (columnStart > columnEnd) {
+      [columnStart, columnEnd] = [columnEnd, columnStart];
+    }
+
+    const [areaX, areaY] = this.getCoordinatesByCell(rowStart, columnStart);
+    const [areaWidth, areaHeight] = this.getAreaDimensions(
+      rowStart,
+      columnStart,
+      rowEnd,
+      columnEnd,
+    );
+    extendToOutline.style.border = `1px dashed ${outlineColor}`;
+    extendToOutline.style.borderRadius = "3px";
+
+    extendToOutline.style.left = `${areaX}px`;
+    extendToOutline.style.top = `${areaY}px`;
+    extendToOutline.style.width = `${areaWidth - 1}px`;
+    extendToOutline.style.height = `${areaHeight - 1}px`;
+  }
+
+  private getColumnWidth(sheet: number, column: number): number {
+    return Math.round(
+      this.model.getColumnWidth(sheet, column) * COLUMN_WIDTH_SCALE,
+    );
+  }
+
+  private getRowHeight(sheet: number, row: number): number {
+    return Math.round(this.model.getRowHeight(sheet, row) * ROW_HEIGH_SCALE);
+  }
+
+  private drawCellEditor(): void {
+    const cell = this.workbookState.getEditingCell();
+    const selectedSheet = this.model.getSelectedSheet();
+    const { editor } = this;
+    if (!cell || cell.sheet !== selectedSheet) {
+      // If the editing cell is not in the same sheet as the selected sheet
+      // we take the editor out of view
+      editor.style.left = "-9999px";
+      editor.style.top = "-9999px";
+      return;
+    }
+    const { row, column } = cell;
+    // const style = this.model.getCellStyle(
+    //   selectedSheet,
+    //   selectedRow,
+    //   selectedColumn
+    // );
+    // cellOutline.style.fontWeight = style.font.b ? "bold" : "normal";
+    // cellOutline.style.fontStyle = style.font.i ? "italic" : "normal";
+    // cellOutline.style.backgroundColor = style.fill.fg_color;
+    // TODO: Should we add the same color as the text?
+    // Only if it is not a formula?
+    // cellOutline.style.color = style.font.color;
+    const [x, y] = this.getCoordinatesByCell(row, column);
+    const padding = -1;
+    const width = cell.editorWidth + 2 * padding;
+    const height = cell.editorHeight + 2 * padding;
+    // const width =
+    //   this.getColumnWidth(sheet, column) + 2 * padding;
+    // const height = this.getRowHeight(sheet, row) + 2 * padding;
+    editor.style.left = `${x}px`;
+    editor.style.top = `${y}px`;
+    editor.style.width = `${width - 1}px`;
+    editor.style.height = `${height - 1}px`;
+  }
+
+  private drawCellOutline(): void {
+    const { cellOutline, areaOutline, cellOutlineHandle } = this;
+    if (this.workbookState.getEditingCell()) {
+      cellOutline.style.visibility = "hidden";
+      cellOutlineHandle.style.visibility = "hidden";
+      areaOutline.style.visibility = "hidden";
+      return;
+    }
+    cellOutline.style.visibility = "visible";
+    cellOutlineHandle.style.visibility = this.workbookState.isSelecting()
+      ? "hidden"
+      : "visible";
+    areaOutline.style.visibility = "visible";
+
+    const [selectedSheet, selectedRow, selectedColumn] =
+      this.model.getSelectedCell();
+    const { topLeftCell } = this.getVisibleCells();
+    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
+    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+    const [x, y] = this.getCoordinatesByCell(selectedRow, selectedColumn);
+
+    const padding = -1;
+    const width =
+      this.getColumnWidth(selectedSheet, selectedColumn) + 2 * padding;
+    const height = this.getRowHeight(selectedSheet, selectedRow) + 2 * padding;
+
+    if (
+      (selectedRow < topLeftCell.row && selectedRow > frozenRows) ||
+      (selectedColumn < topLeftCell.column && selectedColumn > frozenColumns)
+    ) {
+      cellOutline.style.visibility = "hidden";
+      cellOutlineHandle.style.visibility = "hidden";
+    }
+
+    // Position the cell outline and clip it
+    cellOutline.style.left = `${x - padding - 2}px`;
+    cellOutline.style.top = `${y - padding - 2}px`;
+    // Reset CSS properties
+    cellOutline.style.minWidth = "";
+    cellOutline.style.minHeight = "";
+    cellOutline.style.maxWidth = "";
+    cellOutline.style.maxHeight = "";
+    cellOutline.style.overflow = "hidden";
+    // New properties
+    cellOutline.style.width = `${width + 1}px`;
+    cellOutline.style.height = `${height + 1}px`;
+
+    cellOutline.style.background = "none";
+
+    // border is 2px so line-height must be height - 4
+    cellOutline.style.lineHeight = `${height - 4}px`;
+    let {
+      range: [rowStart, columnStart, rowEnd, columnEnd],
+    } = this.model.getSelectedView();
+    if (rowStart > rowEnd) {
+      [rowStart, rowEnd] = [rowEnd, rowStart];
+    }
+    if (columnStart > columnEnd) {
+      [columnStart, columnEnd] = [columnEnd, columnStart];
+    }
+    let handleX: number;
+    let handleY: number;
+    // Position the selected area outline
+    if (columnStart === columnEnd && rowStart === rowEnd) {
+      areaOutline.style.visibility = "hidden";
+      [handleX, handleY] = this.getCoordinatesByCell(rowStart, columnStart);
+      handleX += this.getColumnWidth(selectedSheet, columnStart);
+      handleY += this.getRowHeight(selectedSheet, rowStart);
+    } else {
+      areaOutline.style.visibility = "visible";
+      cellOutlineHandle.style.visibility = this.workbookState.isSelecting()
+        ? "hidden"
+        : "visible";
+      const [areaX, areaY] = this.getCoordinatesByCell(rowStart, columnStart);
+      const [areaWidth, areaHeight] = this.getAreaDimensions(
+        rowStart,
+        columnStart,
+        rowEnd,
+        columnEnd,
+      );
+      handleX = areaX + areaWidth;
+      handleY = areaY + areaHeight;
+      const isSelecting = this.workbookState.isSelecting();
+      // Add 1px when selecting to compensate for missing border
+      const borderCompensation = isSelecting ? 1 : 0;
+      areaOutline.style.left = `${areaX - padding - 1}px`;
+      areaOutline.style.top = `${areaY - padding - 1}px`;
+      areaOutline.style.width = `${areaWidth + 2 * padding + 1 + borderCompensation}px`;
+      areaOutline.style.height = `${areaHeight + 2 * padding + 1 + borderCompensation}px`;
+      const clipLeft = rowStart < topLeftCell.row && rowStart > frozenRows;
+      const clipTop =
+        columnStart < topLeftCell.column && columnStart > frozenColumns;
+      areaOutline.style.clip = this.getClipCSS(
+        areaX,
+        areaY,
+        areaWidth + 2 * padding,
+        areaHeight + 2 * padding,
+        clipLeft,
+        clipTop,
+      );
+      areaOutline.style.border = isSelecting
+        ? "none"
+        : `1px solid ${outlineColor}`;
+      // hide the handle if it is out of the visible area
+      if (
+        (rowEnd > frozenRows && rowEnd < topLeftCell.row - 1) ||
+        (columnEnd > frozenColumns && columnEnd < topLeftCell.column - 1)
+      ) {
+        cellOutlineHandle.style.visibility = "hidden";
+      }
+
+      // This is in case the selection starts in the frozen area and ends outside of the frozen area
+      // but we have scrolled out the selection.
+      if (
+        rowStart <= frozenRows &&
+        rowEnd > frozenRows &&
+        rowEnd < topLeftCell.row - 1
+      ) {
+        areaOutline.style.borderBottom = "None";
+        cellOutlineHandle.style.visibility = "hidden";
+      }
+      if (
+        columnStart <= frozenColumns &&
+        columnEnd > frozenColumns &&
+        columnEnd < topLeftCell.column - 1
+      ) {
+        areaOutline.style.borderRight = "None";
+        cellOutlineHandle.style.visibility = "hidden";
+      }
+    }
+
+    const handleBBox = cellOutlineHandle.getBoundingClientRect();
+    const handleWidth = handleBBox.width;
+    const handleHeight = handleBBox.height;
+    cellOutlineHandle.style.left = `${handleX - handleWidth / 2 - 1}px`;
+    cellOutlineHandle.style.top = `${handleY - handleHeight / 2 - 1}px`;
+  }
+
+  private drawCutRange(): void {
+    const range = this.workbookState.getCutRange() || null;
+    if (!range) {
+      return;
+    }
+    const selectedSheet = this.model.getSelectedSheet();
+    if (range.sheet !== selectedSheet) {
+      return;
+    }
+    const ctx = this.ctx;
+    ctx.setLineDash([2, 2]);
+
+    const [xStart, yStart] = this.getCoordinatesByCell(
+      range.rowStart,
+      range.columnStart,
+    );
+    const [xEnd, yEnd] = this.getCoordinatesByCell(
+      range.rowEnd + 1,
+      range.columnEnd + 1,
+    );
+    ctx.strokeStyle = "red";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(xStart, yStart, xEnd - xStart, yEnd - yStart);
+
+    ctx.setLineDash([]);
+  }
+
+  private drawActiveRanges(topLeftCell: Cell, bottomRightCell: Cell): void {
+    let activeRanges = this.workbookState.getActiveRanges();
+    const ctx = this.ctx;
+    ctx.setLineDash([2, 2]);
+    const referencedRange =
+      this.workbookState.getEditingCell()?.referencedRange || null;
+    if (referencedRange) {
+      activeRanges = activeRanges.concat([
+        {
+          ...referencedRange.range,
+          color: getColor(activeRanges.length),
+        },
+      ]);
+    }
+    const selectedSheet = this.model.getSelectedSheet();
+    const activeRangesCount = activeRanges.length;
+    for (let rangeIndex = 0; rangeIndex < activeRangesCount; rangeIndex += 1) {
+      const range = activeRanges[rangeIndex];
+      if (range.sheet !== selectedSheet) {
+        continue;
+      }
+
+      const allowedOffset = 1; // to make borders look nicer
+      const minRow = topLeftCell.row - allowedOffset;
+      const maxRow = bottomRightCell.row + allowedOffset;
+      const minColumn = topLeftCell.column - allowedOffset;
+      const maxColumn = bottomRightCell.column + allowedOffset;
+
+      if (
+        minRow <= range.rowEnd &&
+        range.rowStart <= maxRow &&
+        minColumn <= range.columnEnd &&
+        range.columnStart < maxColumn
+      ) {
+        // Range in the viewport.
+        const displayRange: typeof range = {
+          ...range,
+          rowStart: Math.max(minRow, range.rowStart),
+          rowEnd: Math.min(maxRow, range.rowEnd),
+          columnStart: Math.max(minColumn, range.columnStart),
+          columnEnd: Math.min(maxColumn, range.columnEnd),
+        };
+        const [xStart, yStart] = this.getCoordinatesByCell(
+          displayRange.rowStart,
+          displayRange.columnStart,
+        );
+        const [xEnd, yEnd] = this.getCoordinatesByCell(
+          displayRange.rowEnd + 1,
+          displayRange.columnEnd + 1,
+        );
+        ctx.strokeStyle = range.color;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(xStart, yStart, xEnd - xStart, yEnd - yStart);
+        ctx.fillStyle = hexToRGBA10Percent(range.color);
+        ctx.fillRect(xStart, yStart, xEnd - xStart, yEnd - yStart);
+      }
+    }
+
+    ctx.setLineDash([]);
+  }
+
+  renderSheet(): void {
+    const context = this.ctx;
+    const { canvas } = this;
+    const selectedSheet = this.model.getSelectedSheet();
+    context.lineWidth = 1;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+
+    // Clear the canvas
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    this.removeHandles();
+
+    const { topLeftCell, bottomRightCell } = this.getVisibleCells();
+    this.computeCellsText();
+
+    const frozenColumns = this.model.getFrozenColumnsCount(selectedSheet);
+    const frozenRows = this.model.getFrozenRowsCount(selectedSheet);
+
+    // Draw frozen rows and columns (top-left-pane)
+    let x = headerColumnWidth + 0.5;
+    let y = headerRowHeight + 0.5;
+    for (let row = 1; row <= frozenRows; row += 1) {
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      x = headerColumnWidth + 0.5;
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.renderCellStyle(row, column, x, y, columnWidth, rowHeight);
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+    if (frozenRows === 0 && frozenColumns !== 0) {
+      x = headerColumnWidth + 0.5;
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        x += this.getColumnWidth(selectedSheet, column);
+      }
+    }
+
+    const frozenOffset = frozenSeparatorWidth / 2;
+    // If there are frozen rows draw a separator
+    if (frozenRows) {
+      context.beginPath();
+      context.lineWidth = frozenSeparatorWidth;
+      context.strokeStyle = gridSeparatorColor;
+      context.moveTo(0, y + frozenOffset);
+      context.lineTo(this.width, y + frozenOffset);
+      y += frozenSeparatorWidth;
+      context.stroke();
+      context.lineWidth = 1;
+    }
+
+    // If there are frozen columns draw a separator
+    if (frozenColumns) {
+      context.beginPath();
+      context.lineWidth = frozenSeparatorWidth;
+      context.strokeStyle = gridSeparatorColor;
+      context.moveTo(x + frozenOffset, 0);
+      context.lineTo(x + frozenOffset, this.height);
+      x += frozenSeparatorWidth;
+      context.stroke();
+      context.lineWidth = 1;
+    }
+
+    const frozenX = x;
+    const frozenY = y;
+    // Draw frozen rows (top-right pane)
+    y = headerRowHeight + 0.5;
+    for (let row = 1; row <= frozenRows; row += 1) {
+      x = frozenX;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+      for (
+        let { column } = topLeftCell;
+        column <= bottomRightCell.column;
+        column += 1
+      ) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.renderCellStyle(row, column, x, y, columnWidth, rowHeight);
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+
+    // Draw frozen columns (bottom-left pane)
+    y = frozenY;
+    for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+      x = headerColumnWidth;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+
+      for (let column = 1; column <= frozenColumns; column += 1) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.renderCellStyle(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+
+    // Render all remaining cells (bottom-right pane)
+    y = frozenY;
+    for (let { row } = topLeftCell; row <= bottomRightCell.row; row += 1) {
+      x = frozenX;
+      const rowHeight = this.getRowHeight(selectedSheet, row);
+
+      for (
+        let { column } = topLeftCell;
+        column <= bottomRightCell.column;
+        column += 1
+      ) {
+        const columnWidth = this.getColumnWidth(selectedSheet, column);
+        this.renderCellStyle(row, column, x, y, columnWidth, rowHeight);
+
+        x += columnWidth;
+      }
+      y += rowHeight;
+    }
+
+    // Render all cell texts
+    for (const cell of this.cells) {
+      this.renderCellText(cell);
+    }
+
+    // Draw column headers
+    this.renderColumnHeaders(
+      frozenColumns,
+      topLeftCell.column,
+      bottomRightCell.column,
+    );
+
+    // Draw row headers
+    this.renderRowHeaders(frozenRows, topLeftCell, bottomRightCell);
+
+    // square in the top left corner
+    context.beginPath();
+    context.strokeStyle = gridSeparatorColor;
+    context.moveTo(0, 0.5);
+    context.lineTo(x + headerColumnWidth, 0.5);
+    context.stroke();
+
+    this.drawCellOutline();
+    this.drawCellEditor();
+    this.drawExtendToArea();
+    this.drawActiveRanges(topLeftCell, bottomRightCell);
+    this.drawCutRange();
+  }
+}

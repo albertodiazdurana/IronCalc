@@ -108,34 +108,117 @@ impl Worksheet {
         self.cols = vec![Col {
             min: 1,
             max: constants::LAST_COLUMN,
-            width: constants::DEFAULT_COLUMN_WIDTH / constants::COLUMN_WIDTH_FACTOR,
-            custom_width: true,
+            width: constants::DEFAULT_COLUMN_WIDTH,
+            custom_width: false,
             style: Some(style_index),
         }];
         Ok(())
     }
 
     pub fn set_column_style(&mut self, column: i32, style_index: i32) -> Result<(), String> {
-        let width = constants::DEFAULT_COLUMN_WIDTH / constants::COLUMN_WIDTH_FACTOR;
+        let width = self
+            .get_column_width(column)
+            .unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
         self.set_column_width_and_style(column, width, Some(style_index))
     }
 
     pub fn set_row_style(&mut self, row: i32, style_index: i32) -> Result<(), String> {
+        // FIXME: This is a HACK
+        let custom_format = style_index != 0;
         for r in self.rows.iter_mut() {
             if r.r == row {
                 r.s = style_index;
-                r.custom_format = true;
+                r.custom_format = custom_format;
                 return Ok(());
             }
         }
         self.rows.push(Row {
             height: constants::DEFAULT_ROW_HEIGHT / constants::ROW_HEIGHT_FACTOR,
             r: row,
-            custom_format: true,
-            custom_height: true,
+            custom_format,
+            custom_height: false,
             s: style_index,
             hidden: false,
         });
+        Ok(())
+    }
+
+    pub fn delete_row_style(&mut self, row: i32) -> Result<(), String> {
+        let mut index = None;
+        for (i, r) in self.rows.iter().enumerate() {
+            if r.r == row {
+                index = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = index {
+            if let Some(r) = self.rows.get_mut(i) {
+                r.s = 0;
+                r.custom_format = false;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn delete_column_style(&mut self, column: i32) -> Result<(), String> {
+        if !is_valid_column_number(column) {
+            return Err(format!("Column number '{column}' is not valid."));
+        }
+        let cols = &mut self.cols;
+
+        let mut index = 0;
+        let mut split = false;
+        for c in cols.iter_mut() {
+            let min = c.min;
+            let max = c.max;
+            if min <= column && column <= max {
+                //
+                split = true;
+                break;
+            }
+            if column < min {
+                // We passed, there is nothing to delete
+                break;
+            }
+            index += 1;
+        }
+        if split {
+            let min = cols[index].min;
+            let max = cols[index].max;
+            let custom_width = cols[index].custom_width;
+            let width = cols[index].width;
+            let pre = Col {
+                min,
+                max: column - 1,
+                width,
+                custom_width,
+                style: cols[index].style,
+            };
+            let col = Col {
+                min: column,
+                max: column,
+                width,
+                custom_width,
+                style: None,
+            };
+            let post = Col {
+                min: column + 1,
+                max,
+                width,
+                custom_width,
+                style: cols[index].style,
+            };
+            cols.remove(index);
+            if column != max {
+                cols.insert(index, post);
+            }
+            if custom_width {
+                cols.insert(index, col);
+            }
+            if column != min {
+                cols.insert(index, pre);
+            }
+        }
         Ok(())
     }
 
@@ -255,10 +338,13 @@ impl Worksheet {
     ///   * If the row does not a have a style we add it.
     ///   * If it has we modify the height and make sure it is applied.
     ///
-    /// Fails if column index is outside allowed range.
+    /// Fails if row index is outside allowed range or height is negative.
     pub fn set_row_height(&mut self, row: i32, height: f64) -> Result<(), String> {
         if !is_valid_row(row) {
             return Err(format!("Row number '{row}' is not valid."));
+        }
+        if height < 0.0 {
+            return Err(format!("Can not set a negative height: {height}"));
         }
 
         let rows = &mut self.rows;
@@ -282,11 +368,12 @@ impl Worksheet {
 
     /// Changes the width of a column.
     ///   * If the column does not a have a width we simply add it
-    ///   * If it has, it might be part of a range and we ned to split the range.
+    ///   * If it has, it might be part of a range and we need to split the range.
     ///
-    /// Fails if column index is outside allowed range.
+    /// Fails if column index is outside allowed range or width is negative.
     pub fn set_column_width(&mut self, column: i32, width: f64) -> Result<(), String> {
-        self.set_column_width_and_style(column, width, None)
+        let style = self.get_column_style(column)?;
+        self.set_column_width_and_style(column, width, style)
     }
 
     pub(crate) fn set_column_width_and_style(
@@ -298,12 +385,15 @@ impl Worksheet {
         if !is_valid_column_number(column) {
             return Err(format!("Column number '{column}' is not valid."));
         }
+        if width < 0.0 {
+            return Err(format!("Can not set a negative width: {width}"));
+        }
         let cols = &mut self.cols;
         let mut col = Col {
             min: column,
             max: column,
             width: width / constants::COLUMN_WIDTH_FACTOR,
-            custom_width: true,
+            custom_width: width != constants::DEFAULT_COLUMN_WIDTH,
             style,
         };
         let mut index = 0;
@@ -313,7 +403,9 @@ impl Worksheet {
             let max = c.max;
             if min <= column && column <= max {
                 if min == column && max == column {
+                    c.style = style;
                     c.width = width / constants::COLUMN_WIDTH_FACTOR;
+                    c.custom_width = width != constants::DEFAULT_COLUMN_WIDTH;
                     return Ok(());
                 }
                 split = true;
@@ -375,6 +467,23 @@ impl Worksheet {
             }
         }
         Ok(constants::DEFAULT_COLUMN_WIDTH)
+    }
+
+    /// Returns the column style index if present
+    pub fn get_column_style(&self, column: i32) -> Result<Option<i32>, String> {
+        if !is_valid_column_number(column) {
+            return Err(format!("Column number '{column}' is not valid."));
+        }
+
+        let cols = &self.cols;
+        for col in cols {
+            let min = col.min;
+            let max = col.max;
+            if column >= min && column <= max {
+                return Ok(col.style);
+            }
+        }
+        Ok(None)
     }
 
     // Returns non empty cells in a column

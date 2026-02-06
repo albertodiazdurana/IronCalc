@@ -45,6 +45,8 @@ export default defineConfig({
           { text: "About the web application", link: "/web-application/about" },
           { text: "Importing Files", link: "/web-application/importing-files" },
           { text: "Sharing Files", link: "/web-application/sharing-files" },
+          { text: "Language selector", link: "/web-application/language-selector" },
+          { text: "Managing Workbooks", link: "/web-application/managing-workbooks" },
         ],
       },
       {
@@ -52,12 +54,32 @@ export default defineConfig({
         collapsed: true,
         items: [
           { text: "Formatting Values", link: "/features/formatting-values" },
+          {
+            text: "Name Manager",
+            link: "/features/name-manager",
+          },
           { text: "Using Styles", link: "/features/using-styles" },
           { text: "Keyboard Shortcuts", link: "/features/keyboard-shortcuts" },
           {
             text: "Error Types",
             link: "/features/error-types",
           },
+          {
+            text: "Value Types",
+            link: "/features/value-types",
+          },
+          {
+            text: "Optional Arguments",
+            link: "/features/optional-arguments",
+          },
+          {
+            text: "Units",
+            link: "/features/units",
+          },		  
+          {
+            text: "Serial Numbers",
+            link: "/features/serial-numbers",
+          },		  
           {
             text: "Unsupported Features",
             link: "/features/unsupported-features",
@@ -568,7 +590,7 @@ export default defineConfig({
               },
               {
                 text: "ERF.PRECISE",
-                link: "/functions/engineering/erf.precise",
+                link: "/functions/engineering/erf-precise",
               },
               {
                 text: "ERFC",
@@ -576,7 +598,7 @@ export default defineConfig({
               },
               {
                 text: "ERFC.PRECISE",
-                link: "/functions/engineering/erfc.precise",
+                link: "/functions/engineering/erfc-precise",
               },
               {
                 text: "GESTEP",
@@ -1991,6 +2013,10 @@ export default defineConfig({
         collapsed: true,
         items: [
           {
+            text: "About",
+            link: "/programming/about",
+          },
+          {
             text: "Rust",
             link: "/programming/rust",
           },
@@ -1999,7 +2025,7 @@ export default defineConfig({
             link: "/programming/python-bindings",
           },
           {
-            text: "JavScript",
+            text: "JavaScript",
             link: "/programming/javascript-bindings",
           },
         ],
@@ -2012,6 +2038,10 @@ export default defineConfig({
             text: "How to contribute",
             link: "/contributing/how-to-contribute",
           },
+          {
+            text: "Function documentation guide",
+            link: "/contributing/function-documentation-guide",
+          },
         ],
       },
     ],
@@ -2022,10 +2052,10 @@ export default defineConfig({
     },
 
     lastUpdated: {
-      text: "Updated at",
+      text: "Updated on",
       formatOptions: {
-        dateStyle: "full",
-        timeStyle: "medium",
+        dateStyle: "medium",
+        timeStyle: "short",
       },
     },
 

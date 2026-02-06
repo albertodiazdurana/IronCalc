@@ -25,6 +25,8 @@
 #![doc = include_str!("../examples/formulas_and_errors.rs")]
 //! ```
 
+#![warn(clippy::print_stdout)]
+
 pub mod calc_result;
 pub mod cell;
 pub mod expressions;
@@ -37,9 +39,9 @@ pub mod types;
 pub mod worksheet;
 
 mod actions;
+mod arithmetic;
 mod cast;
 mod constants;
-mod diffs;
 mod functions;
 mod implicit_intersection;
 mod model;
@@ -55,8 +57,11 @@ mod test;
 #[cfg(test)]
 pub mod mock_time;
 
+pub use locale::get_supported_locales;
 pub use model::get_milliseconds_since_epoch;
+pub use model::FmtSettings;
 pub use model::Model;
 pub use user_model::BorderArea;
 pub use user_model::ClipboardData;
 pub use user_model::UserModel;
+pub use utils::get_all_timezones;

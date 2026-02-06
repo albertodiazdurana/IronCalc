@@ -1,11 +1,104 @@
 use crate::{
     calc_result::{CalcResult, Range},
-    expressions::{parser::Node, token::Error, types::CellReferenceIndex},
-    implicit_intersection::implicit_intersection,
+    expressions::{
+        parser::{ArrayNode, Node},
+        token::Error,
+        types::CellReferenceIndex,
+    },
+    formatter::format::parse_formatted_number,
     model::Model,
 };
 
-impl Model {
+pub(crate) enum NumberOrArray {
+    Number(f64),
+    Array(Vec<Vec<ArrayNode>>),
+}
+
+impl<'a> Model<'a> {
+    pub(crate) fn cast_number(&self, s: &str) -> Option<f64> {
+        match s.trim().parse::<f64>() {
+            Ok(f) => Some(f),
+            _ => {
+                let currency = &self.locale.currency.symbol;
+                let mut currencies = vec!["$", "€"];
+                if !currencies.iter().any(|e| *e == currency) {
+                    currencies.push(currency);
+                }
+                // Try to parse as a formatted number (e.g., dates, currencies, percentages)
+                if let Ok((v, _number_format)) = parse_formatted_number(s, &currencies, self.locale)
+                {
+                    return Some(v);
+                }
+                None
+            }
+        }
+    }
+    pub(crate) fn get_number_or_array(
+        &mut self,
+        node: &Node,
+        cell: CellReferenceIndex,
+    ) -> Result<NumberOrArray, CalcResult> {
+        match self.evaluate_node_in_context(node, cell) {
+            CalcResult::Number(f) => Ok(NumberOrArray::Number(f)),
+            CalcResult::String(s) => match self.cast_number(&s) {
+                Some(f) => Ok(NumberOrArray::Number(f)),
+                None => Err(CalcResult::new_error(
+                    Error::VALUE,
+                    cell,
+                    "Expecting number".to_string(),
+                )),
+            },
+            CalcResult::Boolean(f) => {
+                if f {
+                    Ok(NumberOrArray::Number(1.0))
+                } else {
+                    Ok(NumberOrArray::Number(0.0))
+                }
+            }
+            CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(NumberOrArray::Number(0.0)),
+            CalcResult::Range { left, right } => {
+                let sheet = left.sheet;
+                if sheet != right.sheet {
+                    return Err(CalcResult::Error {
+                        error: Error::ERROR,
+                        origin: cell,
+                        message: "3D ranges are not allowed".to_string(),
+                    });
+                }
+                // we need to convert the range into an array
+                let mut array = Vec::new();
+                for row in left.row..=right.row {
+                    let mut row_data = Vec::new();
+                    for column in left.column..=right.column {
+                        let value =
+                            match self.evaluate_cell(CellReferenceIndex { sheet, column, row }) {
+                                CalcResult::String(s) => ArrayNode::String(s),
+                                CalcResult::Number(f) => ArrayNode::Number(f),
+                                CalcResult::Boolean(b) => ArrayNode::Boolean(b),
+                                CalcResult::Error { error, .. } => ArrayNode::Error(error),
+                                CalcResult::Range { .. } => {
+                                    // if we do things right this can never happen.
+                                    // the evaluation of a cell should never return a range
+                                    ArrayNode::Number(0.0)
+                                }
+                                CalcResult::EmptyCell => ArrayNode::Number(0.0),
+                                CalcResult::EmptyArg => ArrayNode::Number(0.0),
+                                CalcResult::Array(_) => {
+                                    // if we do things right this can never happen.
+                                    // the evaluation of a cell should never return an array
+                                    ArrayNode::Number(0.0)
+                                }
+                            };
+                        row_data.push(value);
+                    }
+                    array.push(row_data);
+                }
+                Ok(NumberOrArray::Array(array))
+            }
+            CalcResult::Array(s) => Ok(NumberOrArray::Array(s)),
+            error @ CalcResult::Error { .. } => Err(error),
+        }
+    }
     pub(crate) fn get_number(
         &mut self,
         node: &Node,
@@ -15,16 +108,16 @@ impl Model {
         self.cast_to_number(result, cell)
     }
 
-    fn cast_to_number(
+    pub(crate) fn cast_to_number(
         &mut self,
         result: CalcResult,
         cell: CellReferenceIndex,
     ) -> Result<f64, CalcResult> {
         match result {
             CalcResult::Number(f) => Ok(f),
-            CalcResult::String(s) => match s.parse::<f64>() {
-                Ok(f) => Ok(f),
-                _ => Err(CalcResult::new_error(
+            CalcResult::String(s) => match self.cast_number(&s) {
+                Some(f) => Ok(f),
+                None => Err(CalcResult::new_error(
                     Error::VALUE,
                     cell,
                     "Expecting number".to_string(),
@@ -39,19 +132,16 @@ impl Model {
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(0.0),
             error @ CalcResult::Error { .. } => Err(error),
-            CalcResult::Range { left, right } => {
-                match implicit_intersection(&cell, &Range { left, right }) {
-                    Some(cell_reference) => {
-                        let result = self.evaluate_cell(cell_reference);
-                        self.cast_to_number(result, cell_reference)
-                    }
-                    None => Err(CalcResult::Error {
-                        error: Error::VALUE,
-                        origin: cell,
-                        message: "Invalid reference (number)".to_string(),
-                    }),
-                }
-            }
+            CalcResult::Range { .. } => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
+            CalcResult::Array(_) => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
         }
     }
 
@@ -88,7 +178,7 @@ impl Model {
         // FIXME: I think when casting a number we should convert it to_precision(x, 15)
         // See function Exact
         match result {
-            CalcResult::Number(f) => Ok(format!("{}", f)),
+            CalcResult::Number(f) => Ok(format!("{f}")),
             CalcResult::String(s) => Ok(s),
             CalcResult::Boolean(f) => {
                 if f {
@@ -99,19 +189,16 @@ impl Model {
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => Ok("".to_string()),
             error @ CalcResult::Error { .. } => Err(error),
-            CalcResult::Range { left, right } => {
-                match implicit_intersection(&cell, &Range { left, right }) {
-                    Some(cell_reference) => {
-                        let result = self.evaluate_cell(cell_reference);
-                        self.cast_to_string(result, cell_reference)
-                    }
-                    None => Err(CalcResult::Error {
-                        error: Error::VALUE,
-                        origin: cell,
-                        message: "Invalid reference (string)".to_string(),
-                    }),
-                }
-            }
+            CalcResult::Range { .. } => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
+            CalcResult::Array(_) => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
         }
     }
 
@@ -151,19 +238,16 @@ impl Model {
             CalcResult::Boolean(b) => Ok(b),
             CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(false),
             error @ CalcResult::Error { .. } => Err(error),
-            CalcResult::Range { left, right } => {
-                match implicit_intersection(&cell, &Range { left, right }) {
-                    Some(cell_reference) => {
-                        let result = self.evaluate_cell(cell_reference);
-                        self.cast_to_bool(result, cell_reference)
-                    }
-                    None => Err(CalcResult::Error {
-                        error: Error::VALUE,
-                        origin: cell,
-                        message: "Invalid reference (bool)".to_string(),
-                    }),
-                }
-            }
+            CalcResult::Range { .. } => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
+            CalcResult::Array(_) => Err(CalcResult::Error {
+                error: Error::NIMPL,
+                origin: cell,
+                message: "Arrays not supported yet".to_string(),
+            }),
         }
     }
 

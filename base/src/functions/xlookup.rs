@@ -118,7 +118,7 @@ fn linear_search(
     None
 }
 
-impl Model {
+impl<'a> Model<'a> {
     /// The XLOOKUP function searches a range or an array, and then returns the item corresponding
     /// to the first match it finds. If no match exists, then XLOOKUP can return the closest (approximate) match.
     /// =XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])
@@ -141,9 +141,9 @@ impl Model {
     ///   *  1 - Perform a search starting at the first item. This is the default.
     ///   * -1 - Perform a reverse search starting at the last item.
     ///   *  2 - Perform a binary search that relies on lookup_array being sorted
-    ///          in ascending order. If not sorted, invalid results will be returned.
+    ///      in ascending order. If not sorted, invalid results will be returned.
     ///   * -2 - Perform a binary search that relies on lookup_array being sorted
-    ///          in descending order. If not sorted, invalid results will be returned.
+    ///     in descending order. If not sorted, invalid results will be returned.
     pub(crate) fn fn_xlookup(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         if args.len() < 3 || args.len() > 6 {
             return CalcResult::new_args_number_error(cell);

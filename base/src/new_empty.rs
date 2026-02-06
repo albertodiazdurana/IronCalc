@@ -4,20 +4,21 @@ use std::collections::HashMap;
 
 use crate::{
     calc_result::Range,
-    constants::{DEFAULT_WINDOW_HEIGH, DEFAULT_WINDOW_WIDTH},
+    constants::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH},
     expressions::{
         lexer::LexerMode,
         parser::{
-            stringify::{rename_sheet_in_node, to_rc_format},
+            stringify::{rename_sheet_in_node, to_localized_string, to_rc_format},
             Parser,
         },
         types::CellReferenceRC,
     },
-    language::get_language,
-    locale::get_locale,
+    language::{get_default_language, get_language},
+    locale::{get_default_locale, get_locale},
     model::{get_milliseconds_since_epoch, Model, ParsedDefinedName},
     types::{
-        Metadata, SheetState, Workbook, WorkbookSettings, WorkbookView, Worksheet, WorksheetView,
+        DefinedName, Metadata, SheetState, Workbook, WorkbookSettings, WorkbookView, Worksheet,
+        WorksheetView,
     },
     utils::ParsedReference,
 };
@@ -36,7 +37,7 @@ fn is_valid_sheet_name(name: &str) -> bool {
     !name.is_empty() && name.chars().count() <= 31 && !name.contains(&invalid[..])
 }
 
-impl Model {
+impl<'a> Model<'a> {
     /// Creates a new worksheet. Note that it does not check if the name or the sheet_id exists
     fn new_empty_worksheet(name: &str, sheet_id: u32, view_ids: &[&u32]) -> Worksheet {
         let mut views = HashMap::new();
@@ -80,24 +81,33 @@ impl Model {
         index + 1
     }
 
+    // This function parses all the internal formulas in all the worksheets
+    // (in the default language ("en") and locale ("en") and the RC format)
     pub(crate) fn parse_formulas(&mut self) {
+        let locale = self.locale;
+        let language = self.language;
+
+        self.parser.set_locale(get_default_locale());
+        self.parser.set_language(get_default_language());
         self.parser.set_lexer_mode(LexerMode::R1C1);
         let worksheets = &self.workbook.worksheets;
         for worksheet in worksheets {
             let shared_formulas = &worksheet.shared_formulas;
-            let cell_reference = &Some(CellReferenceRC {
+            let cell_reference = CellReferenceRC {
                 sheet: worksheet.get_name(),
                 row: 1,
                 column: 1,
-            });
+            };
             let mut parse_formula = Vec::new();
             for formula in shared_formulas {
-                let t = self.parser.parse(formula, cell_reference);
+                let t = self.parser.parse(formula, &cell_reference);
                 parse_formula.push(t);
             }
             self.parsed_formulas.push(parse_formula);
         }
         self.parser.set_lexer_mode(LexerMode::A1);
+        self.parser.set_locale(locale);
+        self.parser.set_language(language);
     }
 
     pub(crate) fn parse_defined_names(&mut self) {
@@ -107,7 +117,7 @@ impl Model {
                 ParsedReference::parse_reference_formula(
                     None,
                     &defined_name.formula,
-                    &self.locale,
+                    self.locale,
                     |name| self.get_sheet_index_by_name(name),
                 ) {
                 match reference {
@@ -144,8 +154,9 @@ impl Model {
 
     /// Reparses all formulas and defined names
     pub(crate) fn reset_parsed_structures(&mut self) {
+        let defined_names = self.workbook.get_defined_names_with_scope();
         self.parser
-            .set_worksheets(self.workbook.get_worksheet_names());
+            .set_worksheets_and_names(self.workbook.get_worksheet_names(), defined_names);
         self.parsed_formulas = vec![];
         self.parse_formulas();
         self.parsed_defined_names = HashMap::new();
@@ -153,12 +164,23 @@ impl Model {
         self.evaluate();
     }
 
+    /// Gets the base name for new sheets
+    fn get_sheet_name(&self) -> String {
+        let language = self.language;
+        match language.code.as_str() {
+            "en" => "Sheet".to_string(),
+            "es" => "Hoja".to_string(),
+            "fr" => "Feuil".to_string(),
+            "de" => "Tabelle".to_string(),
+            "it" => "Foglio".to_string(),
+            _ => "Sheet".to_string(),
+        }
+    }
+
     /// Adds a sheet with a automatically generated name
     pub fn new_sheet(&mut self) -> (String, u32) {
         // First we find a name
-
-        // TODO: The name should depend on the locale
-        let base_name = "Sheet";
+        let base_name = self.get_sheet_name();
         let base_name_uppercase = base_name.to_uppercase();
         let mut index = 1;
         while self
@@ -166,11 +188,11 @@ impl Model {
             .get_worksheet_names()
             .iter()
             .map(|s| s.to_uppercase())
-            .any(|x| x == format!("{}{}", base_name_uppercase, index))
+            .any(|x| x == format!("{base_name_uppercase}{index}"))
         {
             index += 1;
         }
-        let sheet_name = format!("{}{}", base_name, index);
+        let sheet_name = format!("{base_name}{index}");
         // Now we need a sheet_id
         let sheet_id = self.get_new_sheet_id();
         let view_ids: Vec<&u32> = self.workbook.views.keys().collect();
@@ -190,7 +212,7 @@ impl Model {
         sheet_id: Option<u32>,
     ) -> Result<(), String> {
         if !is_valid_sheet_name(sheet_name) {
-            return Err(format!("Invalid name for a sheet: '{}'", sheet_name));
+            return Err(format!("Invalid name for a sheet: '{sheet_name}'"));
         }
         if self
             .workbook
@@ -232,12 +254,12 @@ impl Model {
         if let Some(sheet_index) = self.get_sheet_index_by_name(old_name) {
             return self.rename_sheet_by_index(sheet_index, new_name);
         }
-        Err(format!("Could not find sheet {}", old_name))
+        Err(format!("Could not find sheet {old_name}"))
     }
 
     /// Renames a sheet and updates all existing references to that sheet.
     /// It can fail if:
-    ///   * The original index is too large
+    ///   * The original index is out of bounds
     ///   * The target sheet name already exists
     ///   * The target sheet name is invalid
     pub fn rename_sheet_by_index(
@@ -246,27 +268,27 @@ impl Model {
         new_name: &str,
     ) -> Result<(), String> {
         if !is_valid_sheet_name(new_name) {
-            return Err(format!("Invalid name for a sheet: '{}'.", new_name));
+            return Err(format!("Invalid name for a sheet: '{new_name}'."));
         }
-        if self.get_sheet_index_by_name(new_name).is_some() {
-            return Err(format!("Sheet already exists: '{}'.", new_name));
+        if let Some(new_index) = self.get_sheet_index_by_name(new_name) {
+            if new_index != sheet_index {
+                return Err(format!("Sheet already exists: '{new_name}'."));
+            }
         }
-        let worksheets = &self.workbook.worksheets;
-        let sheet_count = worksheets.len() as u32;
-        if sheet_index >= sheet_count {
-            return Err("Sheet index out of bounds".to_string());
-        }
+        // Gets the new name and checks that a sheet with that index exists
+        let old_name = self.workbook.worksheet(sheet_index)?.get_name();
+
         // Parse all formulas with the old name
         // All internal formulas are R1C1
         self.parser.set_lexer_mode(LexerMode::R1C1);
-        // We use iter because the default would be a mut_iter and we don't need a mutable reference
-        let worksheets = &mut self.workbook.worksheets;
-        for worksheet in worksheets {
-            let cell_reference = &Some(CellReferenceRC {
+
+        for worksheet in &mut self.workbook.worksheets {
+            // R1C1 formulas are not tied to a cell (but are tied to a cell)
+            let cell_reference = &CellReferenceRC {
                 sheet: worksheet.get_name(),
                 row: 1,
                 column: 1,
-            });
+            };
             let mut formulas = Vec::new();
             for formula in &worksheet.shared_formulas {
                 let mut t = self.parser.parse(formula, cell_reference);
@@ -275,11 +297,32 @@ impl Model {
             }
             worksheet.shared_formulas = formulas;
         }
-        // Se the mode back to A1
+
+        // Set the mode back to A1
         self.parser.set_lexer_mode(LexerMode::A1);
+
+        // We reparse all the defined names formulas
+        let mut defined_names = Vec::new();
+        // Defined names do not have a context, we can use anything
+        let cell_reference = &CellReferenceRC {
+            sheet: old_name.clone(),
+            row: 1,
+            column: 1,
+        };
+        for defined_name in &mut self.workbook.defined_names {
+            let mut t = self.parser.parse(&defined_name.formula, cell_reference);
+            rename_sheet_in_node(&mut t, sheet_index, new_name);
+            let formula = to_localized_string(&t, cell_reference, self.locale, self.language);
+            defined_names.push(DefinedName {
+                name: defined_name.name.clone(),
+                formula,
+                sheet_id: defined_name.sheet_id,
+            });
+        }
+        self.workbook.defined_names = defined_names;
+
         // Update the name of the worksheet
-        let worksheets = &mut self.workbook.worksheets;
-        worksheets[sheet_index as usize].set_name(new_name);
+        self.workbook.worksheet_mut(sheet_index)?.set_name(new_name);
         self.reset_parsed_structures();
         Ok(())
     }
@@ -295,7 +338,7 @@ impl Model {
         };
         if sheet_index >= sheet_count {
             return Err("Sheet index too large".to_string());
-        }
+        };
         self.workbook.worksheets.remove(sheet_index as usize);
         self.reset_parsed_structures();
         Ok(())
@@ -334,21 +377,30 @@ impl Model {
     }
 
     /// Creates a new workbook with one empty sheet
-    pub fn new_empty(name: &str, locale_id: &str, timezone: &str) -> Result<Model, String> {
+    pub fn new_empty(
+        name: &'a str,
+        locale_id: &'a str,
+        timezone: &'a str,
+        language_id: &'a str,
+    ) -> Result<Model<'a>, String> {
         let tz: Tz = match &timezone.parse() {
             Ok(tz) => *tz,
             Err(_) => return Err(format!("Invalid timezone: {}", &timezone)),
         };
         let locale = match get_locale(locale_id) {
-            Ok(l) => l.clone(),
-            Err(_) => return Err(format!("Invalid locale: {}", locale_id)),
+            Ok(l) => l,
+            Err(_) => return Err(format!("Invalid locale: {locale_id}")),
+        };
+        let language = match get_language(language_id) {
+            Ok(l) => l,
+            Err(_) => return Err(format!("Invalid language: {language_id}")),
         };
 
         let milliseconds = get_milliseconds_since_epoch();
         let seconds = milliseconds / 1000;
         let dt = match DateTime::from_timestamp(seconds, 0) {
             Some(s) => s,
-            None => return Err(format!("Invalid timestamp: {}", milliseconds)),
+            None => return Err(format!("Invalid timestamp: {milliseconds}")),
         };
         // "2020-08-06T21:20:53Z
         let now = dt.format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -359,15 +411,24 @@ impl Model {
             WorkbookView {
                 sheet: 0,
                 window_width: DEFAULT_WINDOW_WIDTH,
-                window_height: DEFAULT_WINDOW_HEIGH,
+                window_height: DEFAULT_WINDOW_HEIGHT,
             },
         );
+
+        let sheet_name = match language.code.as_str() {
+            "en" => "Sheet1".to_string(),
+            "es" => "Hoja1".to_string(),
+            "fr" => "Feuil1".to_string(),
+            "de" => "Tabelle1".to_string(),
+            "it" => "Foglio1".to_string(),
+            _ => "Sheet1".to_string(),
+        };
 
         // String versions of the locale are added here to simplify the serialize/deserialize logic
         let workbook = Workbook {
             shared_strings: vec![],
             defined_names: vec![],
-            worksheets: vec![Model::new_empty_worksheet("Sheet1", 1, &[&0])],
+            worksheets: vec![Model::new_empty_worksheet(&sheet_name, 1, &[&0])],
             styles: Default::default(),
             name: name.to_string(),
             settings: WorkbookSettings {
@@ -388,12 +449,8 @@ impl Model {
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
         let worksheet_names = worksheets.iter().map(|s| s.get_name()).collect();
-        let parser = Parser::new(worksheet_names, HashMap::new());
+        let parser = Parser::new(worksheet_names, vec![], HashMap::new(), locale, language);
         let cells = HashMap::new();
-
-        // FIXME: Add support for display languages
-        #[allow(clippy::expect_used)]
-        let language = get_language("en").expect("").clone();
 
         let mut model = Model {
             workbook,

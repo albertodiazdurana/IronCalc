@@ -35,7 +35,7 @@ pub struct WorkbookView {
     pub sheet: u32,
     /// The current width of the window
     pub window_width: i64,
-    /// The current heigh of the window
+    /// The current height of the window
     pub window_height: i64,
 }
 
@@ -62,8 +62,8 @@ pub struct DefinedName {
 }
 
 /// * state:
-///    18.18.68 ST_SheetState (Sheet Visibility Types)
-///    hidden, veryHidden, visible
+///   18.18.68 ST_SheetState (Sheet Visibility Types)
+///   hidden, veryHidden, visible
 #[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
 pub enum SheetState {
     Visible,
@@ -303,7 +303,14 @@ impl Default for Styles {
         Styles {
             num_fmts: vec![],
             fonts: vec![Default::default()],
-            fills: vec![Default::default()],
+            fills: vec![
+                Default::default(),
+                Fill {
+                    pattern_type: "gray125".to_string(),
+                    fg_color: None,
+                    bg_color: None,
+                },
+            ],
             borders: vec![Default::default()],
             cell_style_xfs: vec![Default::default()],
             cell_xfs: vec![Default::default()],
@@ -321,6 +328,19 @@ pub struct Style {
     pub font: Font,
     pub border: Border,
     pub quote_prefix: bool,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Style {
+            alignment: None,
+            num_fmt: "general".to_string(),
+            fill: Fill::default(),
+            font: Font::default(),
+            border: Border::default(),
+            quote_prefix: false,
+        }
+    }
 }
 
 #[derive(Encode, Decode, Debug, PartialEq, Eq, Clone)]
@@ -394,7 +414,7 @@ impl Default for Font {
             u: false,
             b: false,
             i: false,
-            sz: 11,
+            sz: 13,
             color: Some("#000000".to_string()),
             name: "Calibri".to_string(),
             family: 2,
@@ -425,11 +445,13 @@ impl Default for Fill {
 
 #[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum HorizontalAlignment {
     Center,
     CenterContinuous,
     Distributed,
     Fill,
+    #[default]
     General,
     Justify,
     Left,
@@ -437,11 +459,6 @@ pub enum HorizontalAlignment {
 }
 
 // Note that alignment in "General" depends on type
-impl Default for HorizontalAlignment {
-    fn default() -> Self {
-        Self::General
-    }
-}
 
 impl HorizontalAlignment {
     fn is_default(&self) -> bool {
@@ -467,7 +484,9 @@ impl Display for HorizontalAlignment {
 
 #[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum VerticalAlignment {
+    #[default]
     Bottom,
     Center,
     Distributed,
@@ -478,12 +497,6 @@ pub enum VerticalAlignment {
 impl VerticalAlignment {
     fn is_default(&self) -> bool {
         self == &VerticalAlignment::default()
-    }
-}
-
-impl Default for VerticalAlignment {
-    fn default() -> Self {
-        Self::Bottom
     }
 }
 
@@ -578,7 +591,7 @@ impl Default for CellStyles {
     }
 }
 
-#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Encode, Decode, Debug, PartialEq, Eq, PartialOrd, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum BorderStyle {
     Thin,

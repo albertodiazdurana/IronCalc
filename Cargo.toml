@@ -6,10 +6,12 @@ members = [
   "xlsx",
   "bindings/wasm",
   "bindings/python",
+  "bindings/nodejs",
 ]
 
 exclude = [
   "generate_locale",
+  "webapp/app.ironcalc.com/server",
 ]
 
 [profile.release]

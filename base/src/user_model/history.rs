@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use bitcode::{Decode, Encode};
 
-use crate::types::{Cell, Col, Row, Style};
+use crate::types::{Cell, Col, Row, SheetState, Style, Worksheet};
 
 #[derive(Clone, Encode, Decode)]
 pub(crate) struct RowData {
@@ -39,11 +39,17 @@ pub(crate) enum Diff {
         old_value: Box<Option<Cell>>,
         old_style: Box<Style>,
     },
+    CellClearFormatting {
+        sheet: u32,
+        row: i32,
+        column: i32,
+        old_style: Box<Option<Style>>,
+    },
     SetCellStyle {
         sheet: u32,
         row: i32,
         column: i32,
-        old_value: Box<Style>,
+        old_value: Box<Option<Style>>,
         new_value: Box<Style>,
     },
     // Column and Row diffs
@@ -59,23 +65,53 @@ pub(crate) enum Diff {
         new_value: f64,
         old_value: f64,
     },
-    InsertRow {
-        sheet: u32,
-        row: i32,
-    },
-    DeleteRow {
-        sheet: u32,
-        row: i32,
-        old_data: Box<RowData>,
-    },
-    InsertColumn {
+    SetColumnStyle {
         sheet: u32,
         column: i32,
+        old_value: Box<Option<Style>>,
+        new_value: Box<Style>,
     },
-    DeleteColumn {
+    SetRowStyle {
+        sheet: u32,
+        row: i32,
+        old_value: Box<Option<Style>>,
+        new_value: Box<Style>,
+    },
+    DeleteColumnStyle {
         sheet: u32,
         column: i32,
-        old_data: Box<ColumnData>,
+        old_value: Box<Option<Style>>,
+    },
+    DeleteRowStyle {
+        sheet: u32,
+        row: i32,
+        old_value: Box<Option<Style>>,
+    },
+    InsertRows {
+        sheet: u32,
+        row: i32,
+        count: i32,
+    },
+    DeleteRows {
+        sheet: u32,
+        row: i32,
+        count: i32,
+        old_data: Vec<RowData>,
+    },
+    InsertColumns {
+        sheet: u32,
+        column: i32,
+        count: i32,
+    },
+    DeleteColumns {
+        sheet: u32,
+        column: i32,
+        count: i32,
+        old_data: Vec<ColumnData>,
+    },
+    DeleteSheet {
+        sheet: u32,
+        old_data: Box<Worksheet>,
     },
     SetFrozenRowsCount {
         sheet: u32,
@@ -86,9 +122,6 @@ pub(crate) enum Diff {
         sheet: u32,
         new_value: i32,
         old_value: i32,
-    },
-    DeleteSheet {
-        sheet: u32,
     },
     NewSheet {
         index: u32,
@@ -104,11 +137,53 @@ pub(crate) enum Diff {
         old_value: String,
         new_value: String,
     },
+    SetSheetState {
+        index: u32,
+        old_value: SheetState,
+        new_value: SheetState,
+    },
     SetShowGridLines {
         sheet: u32,
         old_value: bool,
         new_value: bool,
-    }, // FIXME: we are missing SetViewDiffs
+    },
+    CreateDefinedName {
+        name: String,
+        scope: Option<u32>,
+        value: String,
+    },
+    DeleteDefinedName {
+        name: String,
+        scope: Option<u32>,
+        old_value: String,
+    },
+    UpdateDefinedName {
+        name: String,
+        scope: Option<u32>,
+        old_formula: String,
+        new_name: String,
+        new_scope: Option<u32>,
+        new_formula: String,
+    },
+    MoveColumn {
+        sheet: u32,
+        column: i32,
+        delta: i32,
+    },
+    MoveRow {
+        sheet: u32,
+        row: i32,
+        delta: i32,
+    },
+    SetLocale {
+        old_value: String,
+        new_value: String,
+    },
+    SetTimezone {
+        old_value: String,
+        new_value: String,
+    },
+    // FIXME: we are missing SetViewDiffs
 }
 
 pub(crate) type DiffList = Vec<Diff>;
@@ -143,11 +218,6 @@ impl History {
             }
             None => None,
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.redo_stack = vec![];
-        self.undo_stack = vec![];
     }
 }
 

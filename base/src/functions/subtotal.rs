@@ -32,7 +32,7 @@ pub enum CellTableStatus {
     Filtered,
 }
 
-impl Model {
+impl<'a> Model<'a> {
     fn get_table_for_cell(&self, sheet_index: u32, row: i32, column: i32) -> bool {
         let worksheet = match self.workbook.worksheet(sheet_index) {
             Ok(ws) => ws,
@@ -182,6 +182,13 @@ impl Model {
                             }
                         }
                         CalcResult::EmptyCell | CalcResult::EmptyArg => result.push(0.0),
+                        CalcResult::Array(_) => {
+                            return Err(CalcResult::Error {
+                                error: Error::NIMPL,
+                                origin: cell,
+                                message: "Arrays not supported yet".to_string(),
+                            })
+                        }
                     }
                 }
             }
@@ -426,6 +433,13 @@ impl Model {
                         | CalcResult::Number(_)
                         | CalcResult::Boolean(_)
                         | CalcResult::Error { .. } => counta += 1,
+                        CalcResult::Array(_) => {
+                            return CalcResult::Error {
+                                error: Error::NIMPL,
+                                origin: cell,
+                                message: "Arrays not supported yet".to_string(),
+                            }
+                        }
                     }
                 }
             }

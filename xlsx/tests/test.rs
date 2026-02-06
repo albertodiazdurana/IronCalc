@@ -9,13 +9,13 @@ use ironcalc::compare::{test_file, test_load_and_saving};
 use ironcalc::export::save_to_xlsx;
 use ironcalc::import::{load_from_icalc, load_from_xlsx, load_from_xlsx_bytes};
 use ironcalc_base::types::{HorizontalAlignment, VerticalAlignment};
-use ironcalc_base::Model;
+use ironcalc_base::{Model, UserModel};
 
 // This is a functional test.
 // We check that the output of example.xlsx is what we expect.
 #[test]
 fn test_example() {
-    let model = load_from_xlsx("tests/example.xlsx", "en", "UTC").unwrap();
+    let model = load_from_xlsx("tests/example.xlsx", "en", "UTC", "en").unwrap();
     // We should use the API once it is in place
     let workbook = model.workbook;
     let ws = &workbook.worksheets;
@@ -47,9 +47,9 @@ fn test_example() {
     assert_eq!(ws[0].views[&0].column, 5);
     assert_eq!(ws[0].views[&0].range, [13, 5, 20, 14]);
 
-    let model2 = load_from_icalc("tests/example.ic").unwrap();
-    let s = bitcode::encode(&model2.workbook);
-    assert_eq!(workbook, model2.workbook, "{:?}", s);
+    let model2 = load_from_icalc("tests/example.ic", "en").unwrap();
+    let _ = bitcode::encode(&model2.workbook);
+    assert_eq!(workbook, model2.workbook);
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn test_load_from_xlsx_bytes() {
 
 #[test]
 fn no_grid() {
-    let model = load_from_xlsx("tests/NoGrid.xlsx", "en", "UTC").unwrap();
+    let model = load_from_xlsx("tests/NoGrid.xlsx", "en", "UTC", "en").unwrap();
     {
         let workbook = &model.workbook;
         let ws = &workbook.worksheets;
@@ -87,7 +87,7 @@ fn no_grid() {
         // save it and check again
         let temp_file_name = "temp_file_no_grid.xlsx";
         save_to_xlsx(&model, temp_file_name).unwrap();
-        let model = load_from_xlsx(temp_file_name, "en", "UTC").unwrap();
+        let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
         let workbook = &model.workbook;
         let ws = &workbook.worksheets;
 
@@ -110,13 +110,13 @@ fn no_grid() {
 
 #[test]
 fn test_save_to_xlsx() {
-    let mut model = load_from_xlsx("tests/example.xlsx", "en", "UTC").unwrap();
+    let mut model = load_from_xlsx("tests/example.xlsx", "en", "UTC", "en").unwrap();
     model.evaluate();
     let temp_file_name = "temp_file_example.xlsx";
     // test can safe
     save_to_xlsx(&model, temp_file_name).unwrap();
     // test can open
-    let model = load_from_xlsx(temp_file_name, "en", "UTC").unwrap();
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
     let metadata = &model.workbook.metadata;
     assert_eq!(metadata.application, "IronCalc Sheets");
     // FIXME: This will need to be updated once we fix versioning
@@ -142,7 +142,7 @@ fn test_save_to_xlsx() {
 #[test]
 fn test_freeze() {
     // freeze has 3 frozen columns and 2 frozen rows
-    let model = load_from_xlsx("tests/freeze.xlsx", "en", "UTC")
+    let model = load_from_xlsx("tests/freeze.xlsx", "en", "UTC", "en")
         .unwrap()
         .workbook;
     assert_eq!(model.worksheets[0].frozen_rows, 2);
@@ -152,7 +152,7 @@ fn test_freeze() {
 #[test]
 fn test_split() {
     // We test that a workbook with split panes do not produce frozen rows and columns
-    let model = load_from_xlsx("tests/split.xlsx", "en", "UTC")
+    let model = load_from_xlsx("tests/split.xlsx", "en", "UTC", "en")
         .unwrap()
         .workbook;
     assert_eq!(model.worksheets[0].frozen_rows, 0);
@@ -290,14 +290,14 @@ fn test_model_has_correct_styles(model: &Model) {
 
 #[test]
 fn test_simple_text() {
-    let model = load_from_xlsx("tests/basic_text.xlsx", "en", "UTC").unwrap();
+    let model = load_from_xlsx("tests/basic_text.xlsx", "en", "UTC", "en").unwrap();
 
     test_model_has_correct_styles(&model);
 
     let temp_file_name = "temp_file_test_named_styles.xlsx";
     save_to_xlsx(&model, temp_file_name).unwrap();
 
-    let model = load_from_xlsx(temp_file_name, "en", "UTC").unwrap();
+    let model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
     fs::remove_file(temp_file_name).unwrap();
     test_model_has_correct_styles(&model);
 }
@@ -305,10 +305,10 @@ fn test_simple_text() {
 #[test]
 fn test_defined_names_casing() {
     let test_file_path = "tests/calc_tests/defined_names_for_unit_test.xlsx";
-    let loaded_workbook = load_from_xlsx(test_file_path, "en", "UTC")
+    let loaded_workbook = load_from_xlsx(test_file_path, "en", "UTC", "en")
         .unwrap()
         .workbook;
-    let mut model = Model::from_bytes(&bitcode::encode(&loaded_workbook)).unwrap();
+    let mut model = Model::from_bytes(&bitcode::encode(&loaded_workbook), "en").unwrap();
 
     let (row, column) = (2, 13); // B13
     let test_cases = [
@@ -346,21 +346,70 @@ fn test_xlsx() {
     let path = format!("{}", Uuid::new_v4());
     let dir = temp_folder.join(path);
     fs::create_dir(&dir).unwrap();
+    let mut is_error = false;
     for file_path in entries {
         let file_name_str = file_path.file_name().unwrap().to_str().unwrap();
         let file_path_str = file_path.to_str().unwrap();
-        println!("Testing file: {}", file_path_str);
+        println!("Testing file: {file_path_str}");
         if file_name_str.ends_with(".xlsx") && !file_name_str.starts_with('~') {
             if let Err(message) = test_file(file_path_str) {
-                println!("{}", message);
-                panic!("Model was evaluated inconsistently with XLSX data.")
+                println!("Error with file: '{file_path_str}'");
+                println!("{message}");
+                is_error = true;
             }
-            assert!(test_load_and_saving(file_path_str, &dir).is_ok());
+            let t = test_load_and_saving(file_path_str, &dir);
+            if t.is_err() {
+                println!("Error while load and saving file: {file_path_str}");
+                is_error = true;
+            }
         } else {
             println!("skipping");
         }
     }
     fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !is_error,
+        "Models were evaluated inconsistently with XLSX data."
+    );
+}
+
+#[test]
+fn test_statistical_xlsx() {
+    let mut entries = fs::read_dir("tests/statistical/")
+        .unwrap()
+        .map(|res| res.map(|e| e.path()))
+        .collect::<Result<Vec<_>, io::Error>>()
+        .unwrap();
+    entries.sort();
+    let temp_folder = env::temp_dir();
+    let path = format!("{}", Uuid::new_v4());
+    let dir = temp_folder.join(path);
+    fs::create_dir(&dir).unwrap();
+    let mut is_error = false;
+    for file_path in entries {
+        let file_name_str = file_path.file_name().unwrap().to_str().unwrap();
+        let file_path_str = file_path.to_str().unwrap();
+        println!("Testing file: {file_path_str}");
+        if file_name_str.ends_with(".xlsx") && !file_name_str.starts_with('~') {
+            if let Err(message) = test_file(file_path_str) {
+                println!("Error with file: '{file_path_str}'");
+                println!("{message}");
+                is_error = true;
+            }
+            let t = test_load_and_saving(file_path_str, &dir);
+            if t.is_err() {
+                println!("Error while load and saving file: {file_path_str}");
+                is_error = true;
+            }
+        } else {
+            println!("skipping");
+        }
+    }
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !is_error,
+        "Models were evaluated inconsistently with XLSX data."
+    );
 }
 
 #[test]
@@ -375,20 +424,26 @@ fn no_export() {
     let path = format!("{}", Uuid::new_v4());
     let dir = temp_folder.join(path);
     fs::create_dir(&dir).unwrap();
+    let mut is_error = false;
     for file_path in entries {
         let file_name_str = file_path.file_name().unwrap().to_str().unwrap();
         let file_path_str = file_path.to_str().unwrap();
-        println!("Testing file: {}", file_path_str);
+        println!("Testing file: {file_path_str}");
         if file_name_str.ends_with(".xlsx") && !file_name_str.starts_with('~') {
             if let Err(message) = test_file(file_path_str) {
-                println!("{}", message);
-                panic!("Model was evaluated inconsistently with XLSX data.")
+                println!("Error with file: '{file_path_str}'");
+                println!("{message}");
+                is_error = true;
             }
         } else {
             println!("skipping");
         }
     }
     fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !is_error,
+        "Models were evaluated inconsistently with XLSX data."
+    );
 }
 
 // This test verifies whether exporting the merged cells functionality is happening properly or not.
@@ -400,7 +455,7 @@ fn test_exporting_merged_cells() {
     let expected_merge_cell_ref = {
         // loading the xlsx file containing merged cells
         let example_file_name = "tests/example.xlsx";
-        let mut model = load_from_xlsx(example_file_name, "en", "UTC").unwrap();
+        let mut model = load_from_xlsx(example_file_name, "en", "UTC", "en").unwrap();
         let expected_merge_cell_ref = model
             .workbook
             .worksheets
@@ -414,7 +469,7 @@ fn test_exporting_merged_cells() {
         expected_merge_cell_ref
     };
     {
-        let mut temp_model = load_from_xlsx(temp_file_name, "en", "UTC").unwrap();
+        let mut temp_model = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
         {
             // loading the previous file back and verifying whether
             // merged cells got exported properly or not
@@ -441,7 +496,7 @@ fn test_exporting_merged_cells() {
                 .clear();
 
             save_to_xlsx(&temp_model, temp_file_name).unwrap();
-            let temp_model2 = load_from_xlsx(temp_file_name, "en", "UTC").unwrap();
+            let temp_model2 = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
             let got_merge_cell_ref_cnt = &temp_model2
                 .workbook
                 .worksheets
@@ -457,6 +512,45 @@ fn test_exporting_merged_cells() {
 }
 
 #[test]
+fn test_templates_xlsx() {
+    let mut entries = fs::read_dir("tests/templates/")
+        .unwrap()
+        .map(|res| res.map(|e| e.path()))
+        .collect::<Result<Vec<_>, io::Error>>()
+        .unwrap();
+    entries.sort();
+    let temp_folder = env::temp_dir();
+    let path = format!("{}", Uuid::new_v4());
+    let dir = temp_folder.join(path);
+    fs::create_dir(&dir).unwrap();
+    let mut is_error = false;
+    for file_path in entries {
+        let file_name_str = file_path.file_name().unwrap().to_str().unwrap();
+        let file_path_str = file_path.to_str().unwrap();
+        println!("Testing file: {file_path_str}");
+        if file_name_str.ends_with(".xlsx") && !file_name_str.starts_with('~') {
+            if let Err(message) = test_file(file_path_str) {
+                println!("Error with file: '{file_path_str}'");
+                println!("{message}");
+                is_error = true;
+            }
+            let t = test_load_and_saving(file_path_str, &dir);
+            if t.is_err() {
+                println!("Error while load and saving file: {file_path_str}");
+                is_error = true;
+            }
+        } else {
+            println!("skipping");
+        }
+    }
+    fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !is_error,
+        "Models were evaluated inconsistently with XLSX data."
+    );
+}
+
+#[test]
 fn test_documentation_xlsx() {
     let mut entries = fs::read_dir("tests/docs/")
         .unwrap()
@@ -465,27 +559,30 @@ fn test_documentation_xlsx() {
         .unwrap();
     entries.sort();
     // We can't test volatiles
-    let skip = ["DATE.xlsx", "DAY.xlsx", "MONTH.xlsx", "YEAR.xlsx"];
-    let skip = skip.map(|s| format!("tests/docs/{s}"));
-    println!("{:?}", skip);
+    let mut skip = vec!["DATE.xlsx", "DAY.xlsx", "MONTH.xlsx", "YEAR.xlsx"];
+    // Numerically unstable
+    skip.push("TAN.xlsx");
+    let skip: Vec<String> = skip.iter().map(|s| format!("tests/docs/{s}")).collect();
+    println!("{skip:?}");
     // dumb counter to make sure we are actually testing the files
-    assert_eq!(entries.len(), 7);
+    assert!(entries.len() > 7);
     let temp_folder = env::temp_dir();
     let path = format!("{}", Uuid::new_v4());
     let dir = temp_folder.join(path);
     fs::create_dir(&dir).unwrap();
+    let mut is_error = false;
     for file_path in entries {
         let file_name_str = file_path.file_name().unwrap().to_str().unwrap();
         let file_path_str = file_path.to_str().unwrap();
         if skip.contains(&file_path_str.to_string()) {
-            println!("Skipping file: {}", file_path_str);
+            println!("Skipping file: {file_path_str}");
             continue;
         }
-        println!("Testing file: {}", file_path_str);
+        println!("Testing file: {file_path_str}");
         if file_name_str.ends_with(".xlsx") && !file_name_str.starts_with('~') {
             if let Err(message) = test_file(file_path_str) {
-                println!("{}", message);
-                panic!("Model was evaluated inconsistently with XLSX data.")
+                println!("{message}");
+                is_error = true;
             }
             assert!(test_load_and_saving(file_path_str, &dir).is_ok());
         } else {
@@ -493,4 +590,52 @@ fn test_documentation_xlsx() {
         }
     }
     fs::remove_dir_all(&dir).unwrap();
+    assert!(
+        !is_error,
+        "Models were evaluated inconsistently with XLSX data."
+    )
+}
+
+#[test]
+fn test_user_model() {
+    let temp_file_name = "temp_file_test_user_model.xlsx";
+    let mut model = UserModel::new_empty("my_model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "=1+1").unwrap();
+
+    // test we can use `get_model` to save the model
+    save_to_xlsx(model.get_model(), temp_file_name).unwrap();
+    fs::remove_file(temp_file_name).unwrap();
+
+    // we can still use the model afterwards
+    model.set_rows_height(0, 1, 1, 100.0).unwrap();
+}
+
+// This is produced with:
+// from openpyxl import Workbook
+
+// # Create new workbook
+// wb = Workbook()
+// ws = wb.active
+
+// # Write text and formula
+// ws['A1'] = 'Hello, World!'
+// ws['A2'] = '=1+1'
+
+// ws['B1'] = '=CONCAT("It is", " what it is")'
+
+// # Save
+// wb.save('openpyxl_example.xlsx')
+#[test]
+fn test_pyopenxl_example() {
+    let mut model = load_from_xlsx("tests/openpyxl_example.xlsx", "en", "UTC", "en").unwrap();
+    model.evaluate();
+
+    let a1 = model.get_formatted_cell_value(0, 1, 1).unwrap();
+    assert_eq!(a1, "Hello, World!");
+
+    let a2 = model.get_formatted_cell_value(0, 2, 1).unwrap();
+    assert_eq!(a2, "2");
+
+    let b1 = model.get_formatted_cell_value(0, 1, 2).unwrap();
+    assert_eq!(b1, "It is what it is");
 }

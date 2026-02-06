@@ -56,7 +56,7 @@ impl<'a> Process<'a> {
     }
 }
 
-impl<'a> Extend<(usize, Value)> for Process<'a> {
+impl Extend<(usize, Value)> for Process<'_> {
     fn extend<I: IntoIterator<Item = (usize, Value)>>(&mut self, it: I) {
         for v in it.into_iter() {
             self.process(v);
@@ -78,7 +78,7 @@ impl<'a> Extend<(usize, Value)> for Process<'a> {
 /// The resulting string is safe to use inside XML attribute values.
 ///
 /// Does not perform allocations if the given string does not contain escapable characters.
-pub fn escape_xml(s: &str) -> Cow<str> {
+pub fn escape_xml(s: &'_ str) -> Cow<'_, str> {
     let mut p = Process::Borrowed(s);
     p.extend(s.char_indices().map(|(ind, c)| (ind, escape_char(c))));
     p.into_result()

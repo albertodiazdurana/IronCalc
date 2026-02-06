@@ -2,7 +2,7 @@ use chrono::Datelike;
 
 use crate::{
     calc_result::CalcResult,
-    constants::{LAST_COLUMN, LAST_ROW},
+    constants::{LAST_COLUMN, LAST_ROW, MAXIMUM_DATE_SERIAL_NUMBER, MINIMUM_DATE_SERIAL_NUMBER},
     expressions::{parser::Node, token::Error, types::CellReferenceIndex},
     formatter::dates::from_excel_date,
     model::Model,
@@ -13,37 +13,32 @@ use super::financial_util::{compute_irr, compute_npv, compute_rate, compute_xirr
 // See:
 // https://github.com/apache/openoffice/blob/c014b5f2b55cff8d4b0c952d5c16d62ecde09ca1/main/scaddins/source/analysis/financial.cxx
 
-// FIXME: Is this enough?
-fn is_valid_date(date: f64) -> bool {
-    date > 0.0
-}
-
-fn is_less_than_one_year(start_date: i64, end_date: i64) -> bool {
+fn is_less_than_one_year(start_date: i64, end_date: i64) -> Result<bool, String> {
+    let end = from_excel_date(end_date)?;
+    let start = from_excel_date(start_date)?;
     if end_date - start_date < 365 {
-        return true;
+        return Ok(true);
     }
-    let end = from_excel_date(end_date);
-    let start = from_excel_date(start_date);
     let end_year = end.year();
     let start_year = start.year();
     if end_year == start_year {
-        return true;
+        return Ok(true);
     }
     if end_year != start_year + 1 {
-        return false;
+        return Ok(false);
     }
     let start_month = start.month();
     let end_month = end.month();
     if end_month < start_month {
-        return true;
+        return Ok(true);
     }
     if end_month > start_month {
-        return false;
+        return Ok(false);
     }
     // we are one year later same month
     let start_day = start.day();
     let end_day = end.day();
-    end_day <= start_day
+    Ok(end_day <= start_day)
 }
 
 fn compute_payment(
@@ -88,6 +83,9 @@ fn compute_future_value(
 ) -> Result<f64, (Error, String)> {
     if rate == 0.0 {
         return Ok(-pv - pmt * nper);
+    }
+    if rate == -1.0 && nper < 0.0 {
+        return Err((Error::DIV, "Divide by zero".to_string()));
     }
 
     let rate_nper = (1.0 + rate).powf(nper);
@@ -193,7 +191,7 @@ fn compute_ppmt(
 // All, except for rate are easily solvable in terms of the others.
 // In these formulas the payment (pmt) is normally negative
 
-impl Model {
+impl<'a> Model<'a> {
     fn get_array_of_numbers_generic(
         &mut self,
         arg: &Node,
@@ -233,7 +231,7 @@ impl Model {
                             CalcResult::new_error(
                                 Error::ERROR,
                                 *cell,
-                                format!("Invalid worksheet index: '{}'", sheet),
+                                format!("Invalid worksheet index: '{sheet}'"),
                             )
                         })?
                         .dimension()
@@ -247,7 +245,7 @@ impl Model {
                             CalcResult::new_error(
                                 Error::ERROR,
                                 *cell,
-                                format!("Invalid worksheet index: '{}'", sheet),
+                                format!("Invalid worksheet index: '{sheet}'"),
                             )
                         })?
                         .dimension()
@@ -433,7 +431,7 @@ impl Model {
         }
         if rate == -1.0 {
             return CalcResult::Error {
-                error: Error::NUM,
+                error: Error::DIV,
                 origin: cell,
                 message: "Rate must be != -1".to_string(),
             };
@@ -920,7 +918,9 @@ impl Model {
         }
         let first_date = dates[0];
         for date in &dates {
-            if !is_valid_date(*date) {
+            if *date < MINIMUM_DATE_SERIAL_NUMBER as f64
+                || *date > MAXIMUM_DATE_SERIAL_NUMBER as f64
+            {
                 // Excel docs claim that if any number in dates is not a valid date,
                 // XNPV returns the #VALUE! error value, but it seems to return #VALUE!
                 return CalcResult::new_error(
@@ -986,7 +986,9 @@ impl Model {
         }
         let first_date = dates[0];
         for date in &dates {
-            if !is_valid_date(*date) {
+            if *date < MINIMUM_DATE_SERIAL_NUMBER as f64
+                || *date > MAXIMUM_DATE_SERIAL_NUMBER as f64
+            {
                 return CalcResult::new_error(
                     Error::NUM,
                     cell,
@@ -1337,21 +1339,21 @@ impl Model {
         CalcResult::Number(result)
     }
 
-    /// This next three functions deal with Treasure Bills or T-Bills for short
-    /// They are zero-coupon that mature in one year or less.
-    ///  Definitions:
-    ///    $r$ be the discount rate
-    ///    $v$ the face value of the Bill
-    ///    $p$ the price of the Bill
-    ///    $d_m$ is the number of days from the settlement to maturity
-    /// Then:
-    ///   $$ p = v \times\left(1-\frac{d_m}{r}\right) $$
-    /// If d_m is less than 183 days the he Bond Equivalent Yield (BEY, here $y$) is given by:
-    /// $$ y = \frac{F - B}{M}\times \frac{365}{d_m} = \frac{365\times r}{360-r\times d_m}
-    /// If d_m>= 183 days things are a bit more complicated.
-    /// Let $d_e = d_m - 365/2$ if $d_m <= 365$ or $d_e = 183$ if $d_m = 366$.
-    /// $$ v = p\times \left(1+\frac{y}{2}\right)\left(1+d_e\times\frac{y}{365}\right) $$
-    /// Together with the previous relation of $p$ and $v$ gives us a quadratic equation for $y$.
+    // This next three functions deal with Treasure Bills or T-Bills for short
+    // They are zero-coupon that mature in one year or less.
+    //  Definitions:
+    //    $r$ be the discount rate
+    //    $v$ the face value of the Bill
+    //    $p$ the price of the Bill
+    //    $d_m$ is the number of days from the settlement to maturity
+    // Then:
+    //   $$ p = v \times\left(1-\frac{d_m}{r}\right) $$
+    // If d_m is less than 183 days the he Bond Equivalent Yield (BEY, here $y$) is given by:
+    // $$ y = \frac{F - B}{M}\times \frac{365}{d_m} = \frac{365\times r}{360-r\times d_m}
+    // If d_m>= 183 days things are a bit more complicated.
+    // Let $d_e = d_m - 365/2$ if $d_m <= 365$ or $d_e = 183$ if $d_m = 366$.
+    // $$ v = p\times \left(1+\frac{y}{2}\right)\left(1+d_e\times\frac{y}{365}\right) $$
+    // Together with the previous relation of $p$ and $v$ gives us a quadratic equation for $y$.
 
     // TBILLEQ(settlement, maturity, discount)
     pub(crate) fn fn_tbilleq(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
@@ -1370,9 +1372,10 @@ impl Model {
             Ok(f) => f,
             Err(s) => return s,
         };
-        if !is_valid_date(settlement) || !is_valid_date(maturity) {
-            return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string());
-        }
+        let less_than_one_year = match is_less_than_one_year(settlement as i64, maturity as i64) {
+            Ok(f) => f,
+            Err(_) => return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string()),
+        };
         if settlement > maturity {
             return CalcResult::new_error(
                 Error::NUM,
@@ -1380,7 +1383,7 @@ impl Model {
                 "settlement should be <= maturity".to_string(),
             );
         }
-        if !is_less_than_one_year(settlement as i64, maturity as i64) {
+        if !less_than_one_year {
             return CalcResult::new_error(
                 Error::NUM,
                 cell,
@@ -1434,9 +1437,10 @@ impl Model {
             Ok(f) => f,
             Err(s) => return s,
         };
-        if !is_valid_date(settlement) || !is_valid_date(maturity) {
-            return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string());
-        }
+        let less_than_one_year = match is_less_than_one_year(settlement as i64, maturity as i64) {
+            Ok(f) => f,
+            Err(_) => return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string()),
+        };
         if settlement > maturity {
             return CalcResult::new_error(
                 Error::NUM,
@@ -1444,7 +1448,7 @@ impl Model {
                 "settlement should be <= maturity".to_string(),
             );
         }
-        if !is_less_than_one_year(settlement as i64, maturity as i64) {
+        if !less_than_one_year {
             return CalcResult::new_error(
                 Error::NUM,
                 cell,
@@ -1484,9 +1488,10 @@ impl Model {
             Ok(f) => f,
             Err(s) => return s,
         };
-        if !is_valid_date(settlement) || !is_valid_date(maturity) {
-            return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string());
-        }
+        let less_than_one_year = match is_less_than_one_year(settlement as i64, maturity as i64) {
+            Ok(f) => f,
+            Err(_) => return CalcResult::new_error(Error::NUM, cell, "Invalid date".to_string()),
+        };
         if settlement > maturity {
             return CalcResult::new_error(
                 Error::NUM,
@@ -1494,7 +1499,7 @@ impl Model {
                 "settlement should be <= maturity".to_string(),
             );
         }
-        if !is_less_than_one_year(settlement as i64, maturity as i64) {
+        if !less_than_one_year {
             return CalcResult::new_error(
                 Error::NUM,
                 cell,

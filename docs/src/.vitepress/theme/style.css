@@ -175,20 +175,20 @@ li::marker {
   top: 36px;
 }
 
-.VPSwitch[data-v-70a26bb8] {
-  background-color: var(--vp-c-bg-alt);
+.VPSwitch {
+  background-color: var(--vp-c-bg-alt) !important;
 }
 
-.VPDocFooter[data-v-29ec59c0] {
-  margin-top: 36px;
+.VPDocFooter {
+  margin-top: 36px !important;
 }
 
 table {
   width: 100%;
 }
 
-.VPSidebarItem.level-0[data-v-3db96182] {
-  padding-bottom: 10px;
+.VPSidebarItem.level-0 {
+  padding-bottom: 10px !important;
 }
 
 .VPBadge.info {
@@ -206,4 +206,17 @@ table {
 
 .vp-doc h2 > .VPBadge {
   vertical-align: middle;
+}
+
+/**
+ * Component: Images
+ * -------------------------------------------------------------------------- */
+
+.vp-doc img {
+  display: block;
+  margin: 0 auto;
+  border: 2px solid var(--vp-c-divider);
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  max-height: 300px;
 }

@@ -7,7 +7,7 @@ use crate::{
 
 use super::util::{compare_values, from_wildcard_to_regex, result_matches_regex, values_are_equal};
 
-impl Model {
+impl<'a> Model<'a> {
     pub(crate) fn fn_index(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         let row_num;
         let col_num;
@@ -698,7 +698,7 @@ impl Model {
                 let parsed_reference = ParsedReference::parse_reference_formula(
                     Some(cell.sheet),
                     &s,
-                    &self.locale,
+                    self.locale,
                     |name| self.get_sheet_index_by_name(name),
                 );
 
@@ -837,5 +837,48 @@ impl Model {
             column: column_end,
         };
         CalcResult::Range { left, right }
+    }
+
+    // FORMULATEXT(reference)
+    // Returns a formula as a string. Two differences with Excel:
+    // - It returns the formula in English
+    // - It formats the formula without spaces between elements
+    pub(crate) fn fn_formulatext(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
+        if args.len() != 1 {
+            return CalcResult::new_args_number_error(cell);
+        }
+        if let CalcResult::Range { left, right } = self.evaluate_node_with_reference(&args[0], cell)
+        {
+            if left.sheet != right.sheet {
+                return CalcResult::Error {
+                    error: Error::ERROR,
+                    origin: cell,
+                    message: "3D ranges not supported".to_string(),
+                };
+            }
+            if left.row != right.row || left.column != right.column {
+                // FIXME: Implicit intersection or dynamic arrays
+                return CalcResult::Error {
+                    error: Error::NIMPL,
+                    origin: cell,
+                    message: "argument must be a reference to a single cell".to_string(),
+                };
+            }
+            if let Ok(Some(f)) = self.get_english_cell_formula(left.sheet, left.row, left.column) {
+                CalcResult::String(f)
+            } else {
+                CalcResult::Error {
+                    error: Error::NA,
+                    origin: cell,
+                    message: "Reference does not have a formula".to_string(),
+                }
+            }
+        } else {
+            CalcResult::Error {
+                error: Error::ERROR,
+                origin: cell,
+                message: "Argument must be a reference".to_string(),
+            }
+        }
     }
 }

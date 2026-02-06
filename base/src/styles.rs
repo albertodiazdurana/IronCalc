@@ -4,8 +4,6 @@ use crate::{
     types::{Border, CellStyles, CellXfs, Fill, Font, NumFmt, Style, Styles},
 };
 
-// TODO: Move Styles and all related types from crate::types here
-// Not doing it right now to not have conflicts with exporter branch
 impl Styles {
     fn get_font_index(&self, font: &Font) -> Option<i32> {
         for (font_index, item) in self.fonts.iter().enumerate() {
@@ -156,7 +154,7 @@ impl Styles {
                 return Ok(cell_style.xf_id);
             }
         }
-        Err(format!("Style '{}' not found", style_name))
+        Err(format!("Style '{style_name}' not found"))
     }
 
     pub fn create_named_style(&mut self, style_name: &str, style: &Style) -> Result<(), String> {
@@ -215,7 +213,7 @@ impl Styles {
 }
 
 // TODO: Try to find a better spot for styles setters
-impl Model {
+impl<'a> Model<'a> {
     pub fn set_cell_style(
         &mut self,
         sheet: u32,

@@ -113,6 +113,7 @@ export interface WorksheetProperties {
   name: string;
   color: string;
   sheet_id: number;
+  state: string;
 }
 
 interface CellStyleFill {
@@ -143,10 +144,12 @@ export enum BorderStyle {
   Thin = "thin",
   Medium = "medium",
   Thick = "thick",
-  Dashed = "dashed",
-  Dotted = "dotted",
   Double = "double",
-  None = "none",
+  Dotted = "dotted",
+  SlantDashDot = "slantdashdot",
+  MediumDashed = "mediumdashed",
+  MediumDashDotDot = "mediumdashdotdot",
+  MediumDashDot = "mediumdashdot",
 }
 
 interface BorderItem {
@@ -224,4 +227,21 @@ export interface Clipboard {
   csv: string;
   data: ClipboardData;
   range: [number, number, number, number];
+}
+
+export interface DefinedName {
+  name: string;
+  scope?: number;
+  formula: string;
+}
+
+export interface FmtSettings {
+  currency: string;
+  currency_format: string;
+  short_date: string;
+  short_date_example: string;
+  long_date: string;
+  long_date_example: string;
+  number_fmt: string;
+  number_example: string;
 }
