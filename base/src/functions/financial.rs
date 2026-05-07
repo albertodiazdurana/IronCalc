@@ -1832,7 +1832,109 @@ impl<'a> Model<'a> {
     }
 
     // ACCRINT(issue, first_interest, settlement, rate, par, frequency, [basis], [calc_method])
-    pub(crate) fn fn_accrint(&mut self, _args: &[Node], _cell: CellReferenceIndex) -> CalcResult {
-        todo!()
+    //
+    // Per the BL-006 P2 gap audit, the canonical specification is Mayle's
+    // *Standard Securities Calculation Methods* (SIA / SIFMA), generalized
+    // by the Microsoft DAX `ACCRINT` documentation:
+    //
+    //   AI = par * (rate / frequency) * Σᵢ (Aᵢ / NLᵢ),  i = 1..NC
+    //
+    // This P3 implementation handles the single-quasi-coupon-period case
+    // (NC = 1) by delegating to fn_yearfrac, the same path PR #865's
+    // ACCRINTM uses. It passes Nico's three smoke tests (single-period
+    // inputs). The multi-period summation (NC > 1, "odd first period",
+    // and the calc_method TRUE/FALSE divergence on settlement-after-
+    // first_interest cases) is queued for a follow-up commit before P4
+    // rigorous testing closes. See the gap audit for the full spec and
+    // the BL-006 plan P3 section for the staged work plan.
+    pub(crate) fn fn_accrint(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
+        let arg_count = args.len();
+        if !(6..=8).contains(&arg_count) {
+            return CalcResult::new_args_number_error(cell);
+        }
+        let issue_serial = match self.get_number(&args[0], cell) {
+            Ok(c) => c.floor() as i64,
+            Err(s) => return s,
+        };
+        // first_interest is required by the ACCRINT signature but is only
+        // operationally used when settlement falls after it (calc_method =
+        // FALSE case, see gap audit Q3). For Nico's smoke tests and the
+        // single-period case implemented here, the value is validated but
+        // not used in the day-count computation.
+        let _first_interest_serial = match self.get_number(&args[1], cell) {
+            Ok(c) => c.floor() as i64,
+            Err(s) => return s,
+        };
+        let settlement_serial = match self.get_number(&args[2], cell) {
+            Ok(c) => c.floor() as i64,
+            Err(s) => return s,
+        };
+        let rate = match self.get_number(&args[3], cell) {
+            Ok(f) => f,
+            Err(s) => return s,
+        };
+        let par = match self.get_number(&args[4], cell) {
+            Ok(f) => f,
+            Err(s) => return s,
+        };
+        let frequency = match self.get_number(&args[5], cell) {
+            Ok(f) => f.round() as i32,
+            Err(s) => return s,
+        };
+        let basis = if arg_count > 6 {
+            match self.get_number(&args[6], cell) {
+                Ok(f) => f.round() as i32,
+                Err(s) => return s,
+            }
+        } else {
+            0
+        };
+        // calc_method is parsed and validated for completeness. The current
+        // single-period implementation does not yet differentiate TRUE vs
+        // FALSE behavior; this is the documented P3-to-P4 gap.
+        let _calc_method = if arg_count > 7 {
+            match self.get_boolean(&args[7], cell) {
+                Ok(b) => b,
+                Err(s) => return s,
+            }
+        } else {
+            true
+        };
+        if rate <= 0.0 {
+            return CalcResult::new_error(Error::NUM, cell, "rate must be > 0".to_string());
+        }
+        if par <= 0.0 {
+            return CalcResult::new_error(Error::NUM, cell, "par must be > 0".to_string());
+        }
+        if !matches!(frequency, 1 | 2 | 4) {
+            return CalcResult::new_error(
+                Error::NUM,
+                cell,
+                "frequency must be 1, 2, or 4".to_string(),
+            );
+        }
+        if !(0..=4).contains(&basis) {
+            return CalcResult::new_error(
+                Error::NUM,
+                cell,
+                "basis must be between 0 and 4".to_string(),
+            );
+        }
+        if issue_serial >= settlement_serial {
+            return CalcResult::new_error(
+                Error::NUM,
+                cell,
+                "issue must be before settlement".to_string(),
+            );
+        }
+        let yearfrac_args = [
+            Node::NumberKind(issue_serial as f64),
+            Node::NumberKind(settlement_serial as f64),
+            Node::NumberKind(basis as f64),
+        ];
+        match self.fn_yearfrac(&yearfrac_args, cell) {
+            CalcResult::Number(yf) => CalcResult::Number(par * rate * yf),
+            error => error,
+        }
     }
 }
