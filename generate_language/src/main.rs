@@ -391,6 +391,7 @@ pub struct Functions {
     pub map: String,
     pub reduce: String,
     pub scan: String,
+    pub accrint: String,
 }
 
 #[derive(Encode, Decode, Serialize, Deserialize, Clone)]

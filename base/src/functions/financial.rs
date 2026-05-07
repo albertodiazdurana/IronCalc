@@ -1830,4 +1830,9 @@ impl<'a> Model<'a> {
 
         CalcResult::Number(rate * (cost - result))
     }
+
+    // ACCRINT(issue, first_interest, settlement, rate, par, frequency, [basis], [calc_method])
+    pub(crate) fn fn_accrint(&mut self, _args: &[Node], _cell: CellReferenceIndex) -> CalcResult {
+        todo!()
+    }
 }
