@@ -502,3 +502,120 @@ fn fn_accrint_basis_omitted_defaults_zero() {
         "basis default ({a1}) should equal basis 0 explicit ({a2})"
     );
 }
+
+// ---------------------------------------------------------------------
+// Oracle tests derived from the upstream xlsx fixture
+// (ACCRINT_ACCRINTM.xlsx, commit ff5be2f5). The fixture's cached
+// cell values were validated against Excel Online (Automatic
+// recalc): every value matches byte-identical between Excel's
+// recompute and the cached `<v>` in sheet1.xml. These tests pin
+// the implementation to that empirical oracle.
+//
+// Expected failures on the current implementation:
+//   - I5 single-period freq=4
+//   - K7 calc_method=FALSE short-span at freq=2
+//   - J8-J11 basis dimension at freq=4 multi-period
+// ---------------------------------------------------------------------
+
+// I5: ACCRINT(39508, 39691, 39569, 0.1, 1000, 4) where dates are
+// issue 2008-03-01, first_interest 2008-08-31, settlement 2008-05-01.
+// Excel returns 16.94444444; at freq=1 and freq=2 with the same
+// dates the result is 16.66666667. The freq=4 result diverges
+// because Excel walks quarterly coupon-period boundaries back
+// from first_interest, producing a different A/NL ratio than the
+// freq=1/freq=2 single-period algorithm.
+#[test]
+fn fn_accrint_xlsx_oracle_i5_freq4_default_basis() {
+    let mut model = new_empty_model();
+    model._set("A1", "=ACCRINT(39508, 39691, 39569, 0.1, 1000, 4)");
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 16.944_444_444).abs() < 1e-6,
+        "I5 freq=4 default basis = {a1}, expected 16.94444444"
+    );
+}
+
+// K7: ACCRINT(2017-01-01, 2017-12-01, 2017-04-01, 0.33, 3000, 2,
+// 0, FALSE). Excel returns 247.5 (equal to the calc_method=TRUE
+// result for the same inputs). At freq=2 with these dates,
+// calc_method=FALSE has no observable effect because the
+// trimmed-after-first-period sum still covers the full accrual.
+#[test]
+fn fn_accrint_xlsx_oracle_k7_calc_false_freq2_short_span() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=ACCRINT(DATE(2017,1,1), DATE(2017,12,1), DATE(2017,4,1), 0.33, 3000, 2, 0, FALSE)",
+    );
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 247.5).abs() < 1e-6,
+        "K7 freq=2 basis=0 calc_method=FALSE = {a1}, expected 247.5"
+    );
+}
+
+// J8-J11: ACCRINT(2017-01-01, 2017-12-01, 2017-04-01, 0.33, 3000,
+// 4, basis) for basis in {1, 2, 3, 4}. Excel returns basis-specific
+// values; the current implementation returns the same value across
+// all bases (basis-dimension flattening bug).
+#[test]
+fn fn_accrint_xlsx_oracle_j8_freq4_basis1() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=ACCRINT(DATE(2017,1,1), DATE(2017,12,1), DATE(2017,4,1), 0.33, 3000, 4, 1)",
+    );
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 241.123_626_4).abs() < 1e-6,
+        "J8 freq=4 basis=1 = {a1}, expected 241.1236264"
+    );
+}
+
+#[test]
+fn fn_accrint_xlsx_oracle_j9_freq4_basis2() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=ACCRINT(DATE(2017,1,1), DATE(2017,12,1), DATE(2017,4,1), 0.33, 3000, 4, 2)",
+    );
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 236.5).abs() < 1e-6,
+        "J9 freq=4 basis=2 = {a1}, expected 236.5"
+    );
+}
+
+#[test]
+fn fn_accrint_xlsx_oracle_j10_freq4_basis3() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=ACCRINT(DATE(2017,1,1), DATE(2017,12,1), DATE(2017,4,1), 0.33, 3000, 4, 3)",
+    );
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 240.041_095_9).abs() < 1e-6,
+        "J10 freq=4 basis=3 = {a1}, expected 240.0410959"
+    );
+}
+
+#[test]
+fn fn_accrint_xlsx_oracle_j11_freq4_basis4() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=ACCRINT(DATE(2017,1,1), DATE(2017,12,1), DATE(2017,4,1), 0.33, 3000, 4, 4)",
+    );
+    model.evaluate();
+    let a1: f64 = model._get_text("A1").parse().unwrap();
+    assert!(
+        (a1 - 247.5).abs() < 1e-6,
+        "J11 freq=4 basis=4 = {a1}, expected 247.5"
+    );
+}
