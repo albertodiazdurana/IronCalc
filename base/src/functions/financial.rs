@@ -2021,14 +2021,15 @@ impl<'a> Model<'a> {
             periods.push((window[0], window[1]));
         }
 
-        // For calc_method=FALSE, drop the first quasi-coupon period from
-        // the sum (the period containing `issue`). This matches the
-        // empirical DAX/Excel rule:
-        //   AI_FALSE = AI_TRUE - (full-period contribution of the first period)
-        // When the period list has only one entry, FALSE falls back to
-        // TRUE (the accrual is shorter than one full period and there is
-        // no period to drop).
-        if !calc_method && periods.len() > 1 {
+        // calc_method=FALSE accrues from first_interest to settlement instead
+        // of from issue, by dropping the first (issue-side) quasi-coupon period
+        // from the sum. This only changes the result when settlement lies
+        // beyond the first period's end, so that the remaining accrual is
+        // non-empty; otherwise the whole accrual is in the first period and
+        // FALSE behaves identically to TRUE (verified against the DAX
+        // canonical FALSE = 66.944 and the K7 short-span case = TRUE). See
+        // decision D4.
+        if !calc_method && periods.len() > 1 && settlement_serial > periods[0].1 {
             periods.remove(0);
         }
 
@@ -2045,9 +2046,18 @@ impl<'a> Model<'a> {
                 Ok(d) => d,
                 Err(e) => return e,
             };
-            let nl_days = match self.day_count_basis(period_start, period_end, basis, cell) {
-                Ok(d) => d,
-                Err(e) => return e,
+            // NLᵢ = the normal length of the quasi-coupon period (DAX spec),
+            // NOT the basis day-count of the period. For 30/360 and Actual/360
+            // bases this is a fixed nominal length (360/frequency); for
+            // Actual/365 it is 365/frequency; for Actual/Actual it is the
+            // period's actual day count (Mayle per-security rule). Using the
+            // basis day-count here collapsed bases 2/3 to actual-days and made
+            // the result frequency-insensitive. See decision D2.
+            let nl_days = match basis {
+                0 | 2 | 4 => 360.0 / frequency as f64,
+                3 => 365.0 / frequency as f64,
+                1 => (period_end - period_start) as f64,
+                _ => 360.0 / frequency as f64,
             };
             if nl_days <= 0.0 {
                 continue;
@@ -2061,11 +2071,13 @@ impl<'a> Model<'a> {
         CalcResult::Number(par * (rate / frequency as f64) * sum)
     }
 
-    // Day-count under the given basis for the interval [start, end].
-    // Reuses fn_yearfrac to obtain the year-fraction, then multiplies by
-    // the basis-specific year length to recover days. For basis 1
-    // (Actual/Actual), the year length is the actual length of the year
-    // the interval falls in (365 or 366), per Mayle V1 page 24.
+    // Accrued days (the Aᵢ numerator) under the given basis for the
+    // interval [start, end]: 30/360 for bases 0 and 4, actual days for
+    // bases 1, 2, and 3. Implemented by reusing fn_yearfrac and recovering
+    // days via the basis-specific year length (yearfrac × 360 for 30/360
+    // bases collapses to the 30/360 day count; yearfrac × {360, 365} for
+    // Actual bases collapses to the actual day count). The quasi-coupon
+    // period length NLᵢ is computed separately in fn_accrint (see D2).
     fn day_count_basis(
         &mut self,
         start: i64,
